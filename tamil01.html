@@ -49,9 +49,8 @@ button.on{background:#1c7a3d}
   <button id="bFull">Full</button>
 </div>
 <div id="tabs">
-  <button id="tNew">New Songs (150&ndash;250)</button>
+  <button id="tNew">New Songs (150&ndash;249)</button>
   <button id="tOld">Old Songs (1&ndash;149)</button>
-  
 </div>
 <div id="listView">
   <p>Tamil Songs &mdash; tap a song number to play.</p>
@@ -343,8 +342,8 @@ var SONGS = [
 /* ============== end of editable part ============== */
 
 /* ---- Tabs: array positions (0-based). Song numbers shown = position + 1 ---- */
-var TABS = {  nw:{lo:149, hi:249}, old:{lo:0, hi:148} };
-var tab = "old";
+var TABS = { old:{lo:0, hi:148}, nw:{lo:149, hi:249} };
+var tab = "nw";
 
 var cur = 0, playing = false;
 var $ = function(id){ return document.getElementById(id); };
