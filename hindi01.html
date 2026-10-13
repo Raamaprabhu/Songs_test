@@ -79,9 +79,9 @@ button.on{background:#1c7a3d}
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
 /* ==========================================================
-   Songs are now kept in  hin.txt  (same folder as this file).
+   Songs are now kept in  hin_test.txt  (same folder as this file).
 
-   hin.txt format, one song per line:
+   hin_test.txt format, one song per line:
        Song name | Movie | YouTube link     (leave Movie empty if unknown)
        Song name | YouTube link             (also works)
        YouTube link                         (name fetched from YouTube)
@@ -94,10 +94,10 @@ button.on{background:#1c7a3d}
    No # lines at all (or only "#list")  ->  NO tabs, one serial list.
 
    Start a jukebox video at a time by adding &t=90s to the link.
-   NOTE: hin.txt is loaded with fetch(), so open the page through
+   NOTE: hin_test.txt is loaded with fetch(), so open the page through
    http(s) (e.g. GitHub Pages), not by double-clicking the file.
    ========================================================== */
-var TXT_FILE = "https://raw.githubusercontent.com/Raamaprabhu/Songs_test/main/hin.txt";
+var TXT_FILE = "https://raw.githubusercontent.com/Raamaprabhu/Songs_test/main/hin_test.txt";
 
 var GROUPS = [], SONGS = [], tabbed = false, curTab = 0, counts = {};
 var cur = 0, playing = false;
@@ -126,7 +126,7 @@ function parse(link){
   return {id:m[1], start:s};
 }
 
-/* ---------- read hin.txt ---------- */
+/* ---------- read hin_test.txt ---------- */
 function parseTxt(txt){
   var groups = [], g = null;
   txt.replace(/^\uFEFF/, "").split(/\r?\n/).forEach(function(raw){
@@ -190,7 +190,7 @@ function selectTab(i){
 
 /* ---------- list ---------- */
 function titleFor(s, v, btn){
-  /* only for songs listed without a name in hin.txt */
+  /* only for songs listed without a name in hin_test.txt */
   if(!s.auto || s.tried || !v) return;
   s.tried = true;
   fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent("https://www.youtube.com/watch?v=" + v.id))
