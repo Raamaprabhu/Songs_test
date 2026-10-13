@@ -216,7 +216,7 @@ $("bBack").onclick = function(){
   else if(playing){ showList(); }
 };
 
-fetch("https://raw.githubusercontent.com/Raamaprabhu/Songs_test/main/urls.txt")
+fetch("https://raw.githubusercontent.com/Raamaprabhu/Songs_test/main/tam.txt")
   .then(function(response) {
     if (!response.ok) throw new Error("Unable to load tam.txt (HTTP " + response.status + ")");
     return response.text();
