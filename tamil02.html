@@ -79,26 +79,22 @@ button.on{background:#1c7a3d}
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
 /* ==========================================================
-EDIT HERE: one line per song.
-name = song name   movie = movie / year (optional, can be "")
-link = YouTube link (watch?v=..., youtu.be/...)
-Start a jukebox video at a time by adding &t=90s (or ?t=90s).
-Keep the quotes and the comma at the end of each line.
+   Songs are loaded from urls.txt in this same folder.
+   Format, one song per line:   name | movie | YouTube link
+   Section markers:             #OLD   and   #NEW
+   (the sections may appear in either order)
 
-TABS: songs 1-150 = Old Songs, songs 151-250 = New Songs
-(array positions 0-149 and 150-249). Change TABS below to move the split.
-========================================================== */
+   Numbering: each tab is numbered 1..N on its own,
+   i.e. New Songs = 1..N and Old Songs = 1..M.
+   ========================================================== */
 var SONGS = [];
-/* Song data is loaded from urls.txt in this same folder. */
 
-/* ============== end of editable part ============== */
-
-/* Tab ranges are calculated from #OLD and #NEW markers in urls.txt. */
+/* lo/hi = index range inside SONGS for each tab (filled after urls.txt loads) */
 var TABS = { old:{lo:0, hi:-1}, nw:{lo:0, hi:-1} };
-var tab = "nw";
-
+var tab = "nw";                       /* New Songs is the default tab */
 var cur = 0, playing = false;
 var $ = function(id){ return document.getElementById(id); };
+
 var AKEY = "autoplay:" + location.pathname;
 var autoplay = true;
 try{ var sv = localStorage.getItem(AKEY); if(sv !== null) autoplay = (sv === "1"); }catch(e){}
@@ -107,6 +103,9 @@ function rng(){
   var r = TABS[tab];
   return { lo: r.lo, hi: Math.min(r.hi, SONGS.length - 1) };
 }
+/* number shown to the user: restarts at 1 in every tab */
+function no(i){ return i - rng().lo + 1; }
+function total(){ var r = rng(); return r.hi - r.lo + 1; }
 
 function paintAuto(){
   var b = $("bAuto");
@@ -129,13 +128,16 @@ function parse(link){
 }
 
 var counts = {};
-
 function buildList(){
   var box = $("items"), r = rng(); box.innerHTML = "";
+  if(r.hi < r.lo){
+    var e = document.createElement("p"); e.textContent = "No songs in this list.";
+    box.appendChild(e);
+  }
   for(var i = r.lo; i <= r.hi; i++){ (function(i){
     var s = SONGS[i], v = parse(s.link), b = document.createElement("button");
     b.className = "item";
-    b.innerHTML = '<span class="n">'+(i+1)+'</span><span class="t"><b></b><small></small></span>';
+    b.innerHTML = '<span class="n">'+no(i)+'</span><span class="t"><b></b><small></small></span>';
     b.querySelector("b").textContent = s.name;
     b.querySelector("small").textContent = s.movie || "";
     if(v && counts[v.id] > 1 && !v.start){
@@ -148,7 +150,6 @@ function buildList(){
   $("tNew").className = tab === "nw" ? "on" : "";
   $("listView").scrollTop = 0;
 }
-
 function setTab(t){ tab = t; buildList(); }
 $("tOld").onclick = function(){ setTab("old"); };
 $("tNew").onclick = function(){ setTab("nw"); };
@@ -176,17 +177,17 @@ function onYouTubeIframeAPIReady(){
 }
 
 function play(i){
-  if(!SONGS.length) return;
   var r = rng();
-  if(i > r.hi) i = r.lo; else if(i < r.lo) i = r.hi;   /* loop inside the active tab */
+  if(!SONGS.length || r.hi < r.lo) return;
+  if(i > r.hi) i = r.lo; else if(i < r.lo) i = r.hi; /* loop inside the active tab */
   cur = i; playing = true;
   var s = SONGS[cur], v = parse(s.link);
   $("tabs").style.display = "none";
   $("listView").style.display = "none"; $("playView").style.display = "flex";
-  $("cap").textContent = (cur+1)+" / "+(r.hi+1)+" "+s.name;
+  $("cap").textContent = no(cur)+" / "+total()+" "+s.name;
   $("yt").href = s.link; $("num").value = "";
   if(!v){
-    $("msg").textContent = "Song "+(cur+1)+" does not have a valid YouTube video link.";
+    $("msg").textContent = "Song "+no(cur)+" does not have a valid YouTube video link.";
     $("msg").style.display = "flex";
     return;
   }
@@ -200,11 +201,10 @@ $("bLast").onclick = function(){ play(rng().hi); };
 $("bPrev").onclick = function(){ play(cur-1); };
 $("bNext").onclick = function(){ play(cur+1); };
 $("num").oninput = function(){ this.value = this.value.replace(/[^0-9]/g,"").slice(0,3); };
-
 function go(){
-  var r = rng(), n = parseInt($("num").value, 10);
-  if(n >= r.lo+1 && n <= r.hi+1) play(n-1);
-  else { $("num").value = ""; $("num").placeholder = (r.lo+1)+"-"+(r.hi+1); }
+  var r = rng(), n = parseInt($("num").value, 10), t = total();
+  if(n >= 1 && n <= t) play(r.lo + n - 1);      /* n is the per-tab number */
+  else { $("num").value = ""; $("num").placeholder = "1-"+t; }
 }
 $("bGo").onclick = go;
 $("num").onkeydown = function(e){ if(e.key==="Enter") go(); };
@@ -223,30 +223,30 @@ fetch("urls.txt")
   })
   .then(function(data) {
     var section = null;
-    var oldCount = 0;
-    var newStart = null;
     SONGS = [];
+    TABS = { old:{lo:0, hi:-1}, nw:{lo:0, hi:-1} };
 
     data.split(/\r?\n/).forEach(function(line) {
       line = line.trim();
-      if (!line || line.charAt(0) === "#") {
-        if (line.toUpperCase() === "#OLD") section = "old";
-        else if (line.toUpperCase() === "#NEW") {
-          section = "nw";
-          newStart = SONGS.length;
+      if (!line) return;
+      if (line.charAt(0) === "#") {
+        var tag = line.replace(/^#+\s*/, "").toUpperCase();
+        if (tag.indexOf("OLD") === 0) {
+          section = "old"; TABS.old.lo = SONGS.length; TABS.old.hi = SONGS.length - 1;
+        } else if (tag.indexOf("NEW") === 0) {
+          section = "nw";  TABS.nw.lo = SONGS.length;  TABS.nw.hi = SONGS.length - 1;
         }
         return;
       }
       var p = line.split("|");
-      if (p.length < 3 || !p[0].trim() || !p[2].trim()) return;
+      if (!section || p.length < 3 || !p[0].trim() || !p[2].trim()) return;
       SONGS.push({ name: p[0].trim(), movie: p[1].trim(), link: p.slice(2).join("|").trim() });
-      if (section === "old") oldCount++;
+      TABS[section].hi = SONGS.length - 1;
     });
 
-    if (newStart === null) newStart = oldCount;
-    TABS = { old: { lo: 0, hi: oldCount - 1 }, nw: { lo: newStart, hi: SONGS.length - 1 } };
-    $("tOld").textContent = "Old Songs (1–" + oldCount + ")";
-    $("tNew").textContent = "New Songs (" + (newStart + 1) + "–" + SONGS.length + ")";
+    var nOld = TABS.old.hi - TABS.old.lo + 1, nNew = TABS.nw.hi - TABS.nw.lo + 1;
+    $("tOld").textContent = "Old Songs (1–" + nOld + ")";
+    $("tNew").textContent = "New Songs (1–" + nNew + ")";
 
     counts = {};
     SONGS.forEach(function(s) {
