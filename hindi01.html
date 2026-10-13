@@ -82,8 +82,8 @@ button.on{background:#1c7a3d}
    Songs are now kept in  hin.txt  (same folder as this file).
 
    hin.txt format, one song per line:
-       Song name | YouTube link
-       Song name | Movie | YouTube link     (movie optional)
+       Song name | Movie | YouTube link     (leave Movie empty if unknown)
+       Song name | YouTube link             (also works)
        YouTube link                         (name fetched from YouTube)
 
    Tabs:  a line starting with #  starts a new tab, e.g.
@@ -175,7 +175,7 @@ function buildTabs(){
   if(!tabbed) return;
   GROUPS.forEach(function(x, i){
     var b = document.createElement("button");
-    b.textContent = x.label;
+    b.textContent = x.label + " (" + x.songs.length + ")";
     b.onclick = function(){ selectTab(i); };
     box.appendChild(b);
   });
