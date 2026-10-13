@@ -49,8 +49,8 @@ button.on{background:#1c7a3d}
   <button id="bFull">Full</button>
 </div>
 <div id="tabs">
-  <button id="tNew">New Songs (150–388)</button>
-  <button id="tOld">Old Songs (1–149)</button>
+  <button id="tNew">New Songs</button>
+  <button id="tOld">Old Songs</button>
 </div>
 <div id="listView">
   <p>Tamil Songs — tap a song number to play.</p>
@@ -93,8 +93,8 @@ var SONGS = [];
 
 /* ============== end of editable part ============== */
 
-/* ---- Tabs: array positions (0-based). Song numbers shown = position + 1 ---- */
-var TABS = { old:{lo:0, hi:148}, nw:{lo:149, hi:388} };
+/* Tab ranges are calculated from #OLD and #NEW markers in urls.txt. */
+var TABS = { old:{lo:0, hi:-1}, nw:{lo:0, hi:-1} };
 var tab = "nw";
 
 var cur = 0, playing = false;
@@ -222,14 +222,32 @@ fetch("urls.txt")
     return response.text();
   })
   .then(function(data) {
-    SONGS = data.split(/\r?\n/).map(function(line) {
-      if (!line.trim() || line.trim().charAt(0) === "#") return null;
-      var p = line.split("|");
-      if (p.length < 3 || !p[0].trim() || !p[2].trim()) return null;
-      return { name: p[0].trim(), movie: p[1].trim(), link: p.slice(2).join("|").trim() };
-    }).filter(function(song) { return song !== null; });
+    var section = null;
+    var oldCount = 0;
+    var newStart = null;
+    SONGS = [];
 
-    /* Keep the original tab numbering, but never index beyond the loaded songs. */
+    data.split(/\r?\n/).forEach(function(line) {
+      line = line.trim();
+      if (!line || line.charAt(0) === "#") {
+        if (line.toUpperCase() === "#OLD") section = "old";
+        else if (line.toUpperCase() === "#NEW") {
+          section = "nw";
+          newStart = SONGS.length;
+        }
+        return;
+      }
+      var p = line.split("|");
+      if (p.length < 3 || !p[0].trim() || !p[2].trim()) return;
+      SONGS.push({ name: p[0].trim(), movie: p[1].trim(), link: p.slice(2).join("|").trim() });
+      if (section === "old") oldCount++;
+    });
+
+    if (newStart === null) newStart = oldCount;
+    TABS = { old: { lo: 0, hi: oldCount - 1 }, nw: { lo: newStart, hi: SONGS.length - 1 } };
+    $("tOld").textContent = "Old Songs (1–" + oldCount + ")";
+    $("tNew").textContent = "New Songs (" + (newStart + 1) + "–" + SONGS.length + ")";
+
     counts = {};
     SONGS.forEach(function(s) {
       var v = parse(s.link);
@@ -238,7 +256,8 @@ fetch("urls.txt")
     buildList();
   })
   .catch(function(error) {
-    $("items").textContent = "Error loading urls.txt: " + error.message + ". Make sure urls.txt is in the same folder and served from a web server.";
+    $("items").textContent = "Error loading songs: " + error.message +
+      ". Make sure urls.txt is in the same folder and served from a web server.";
   });
 </script>
 <script src="https://raamaprabhu.github.io/songs/disable_rightclick.js"></script>
