@@ -31,6 +31,8 @@ button.on{background:#1c7a3d}
 #info{padding:6px 12px 0;display:flex;gap:10px;align-items:center}
 #cap{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
 #yt{color:#ffb703;font-size:13px;white-space:nowrap}
+#info2{padding:6px 10px 0}
+#info2 button{width:100%}
 #nav{background:#181d26;padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px}
 .row{display:flex;gap:6px}
 .row>*{flex:1}
@@ -58,6 +60,7 @@ button.on{background:#1c7a3d}
 <div id="playView">
   <div id="stage"><div id="player"></div><div id="msg" style="display:none"></div></div>
   <div id="info"><div id="cap"></div><a id="yt" href="#" target="_blank" rel="noopener">Open on YouTube</a></div>
+  <div id="info2"><button id="bBrowser">Open in browser (background play)</button></div>
   <div id="nav">
     <div class="row">
       <button id="bFirst">First</button>
@@ -97,7 +100,7 @@ button.on{background:#1c7a3d}
    NOTE: hin_test.txt is loaded with fetch(), so open the page through
    http(s) (e.g. GitHub Pages), not by double-clicking the file.
    ========================================================== */
-var TXT_FILE = "https://raw.githubusercontent.com/Raamaprabhu/Songs_test/main/hin_test.txt";
+var TXT_FILE = "hin_test.txt";
 
 var GROUPS = [], SONGS = [], tabbed = false, curTab = 0, counts = {};
 var cur = 0, playing = false;
@@ -247,6 +250,7 @@ function play(i){
   $("listView").style.display="none"; $("playView").style.display="flex";
   paintCap();
   $("yt").href = s.link; $("num").value = "";
+  $("bBrowser").style.display = v ? "block" : "none";
   if(!v){
     $("msg").textContent = "Song "+(cur+1)+" does not have a valid YouTube video link.";
     $("msg").style.display = "flex";
@@ -268,6 +272,13 @@ function go(){
 }
 $("bGo").onclick = go;
 $("num").onkeydown = function(e){ if(e.key==="Enter") go(); };
+$("bBrowser").onclick = function(){
+  /* open the song as a normal YouTube page in a new browser tab (stop the embedded one first) */
+  var v = parse(SONGS[cur].link); if(!v) return;
+  try{ if(ytPlayer && ytPlayer.pauseVideo) ytPlayer.pauseVideo(); }catch(e){}
+  var url = "https://www.youtube.com/watch?v=" + v.id + (v.start ? "&t=" + v.start + "s" : "");
+  window.open(url, "_blank", "noopener");
+};
 $("bList").onclick = showList;
 $("bFull").onclick = function(){ try{ var d=document.documentElement; (d.requestFullscreen||d.webkitRequestFullscreen).call(d); }catch(e){} };
 $("bBack").onclick = function(){
