@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimalist Audio Player</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .player-card {
+            background: #1e1e1e;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            text-align: center;
+            width: 300px;
+        }
+        /* Completely hides the YouTube video block from the interface */
+        #youtube-audio-player {
+            display: none;
+        }
+        button {
+            background: #1db954;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="player-card">
+        <h3>YouTube Audio Stream</h3>
+        <p id="status">Loading Player...</p>
+        <button id="play-pause-btn" onclick="togglePlayback()">Play</button>
+    </div>
+
+    <!-- Hidden YouTube Player Container -->
+    <div id="youtube-audio-player"></div>
+
+    <script>
+        // Load the YouTube IFrame Player API asynchronously
+        var tag = document.createElement('script');
+        tag.src = "https://youtube.com";
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        var player;
+        var isPlaying = false;
+
+        // Replace 'dQw4w9WgXcQ' with your target YouTube Video ID or Music ID
+        var videoId = 'dQw4w9WgXcQ'; 
+
+        // This function creates an <iframe> (and YouTube player) after the API code downloads
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('youtube-audio-player', {
+                height: '0',
+                width: '0',
+                videoId: videoId,
+                playerVars: {
+                    'playsinline': 1, // Crucial for mobile background restrictions
+                    'controls': 0,
+                    'disablekb': 1
+                },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+        }
+
+        function onPlayerReady(event) {
+            document.getElementById('status').innerText = "Ready to Play";
+        }
+
+        function onPlayerStateChange(event) {
+            var btn = document.getElementById('play-pause-btn');
+            var statusText = document.getElementById('status');
+            
+            if (event.data == YT.PlayerState.PLAYING) {
+                btn.innerText = "Pause";
+                statusText.innerText = "Playing Audio...";
+                isPlaying = true;
+            } else {
+                btn.innerText = "Play";
+                statusText.innerText = "Paused";
+                isPlaying = false;
+            }
+        }
+
+        function togglePlayback() {
+            if (!player) return;
+            
+            if (isPlaying) {
+                player.pauseVideo();
+            } else {
+                player.playVideo();
+            }
+        }
+    </script>
+</body>
+</html>
