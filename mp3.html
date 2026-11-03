@@ -27,9 +27,10 @@
             width: 100%;
             max-width: 360px;
         }
+        /* Increased heights ensure Chrome security policies recognize the active player session */
         .video-wrapper {
             width: 100%;
-            height: 60px;
+            height: 180px; 
             border-radius: 8px;
             overflow: hidden;
             margin-bottom: 20px;
@@ -49,7 +50,7 @@
             background: #1db954;
             color: white;
             border: none;
-            padding: 10px 20px;
+            padding: 12px 24px;
             border-radius: 20px;
             font-size: 14px;
             font-weight: bold;
@@ -114,8 +115,7 @@
     </div>
 
     <script>
-        // 1. CHOOSE YOUR TRACKS
-        // For maximum safety, provide the exact 11-character Video ID as shown below
+        // Exact 11-Character YouTube IDs
         const tracks = [
             { title: "Lofi Hip Hop Beats", id: "jfKfPfyJRdk" },
             { title: "Synthwave Radio", id: "4xDzrJKXOOY" },
@@ -123,35 +123,19 @@
             { title: "Acoustic Guitar Session", id: "kJQP7kiw5Fk" }
         ];
 
-        // Clean full URLs into pure IDs safely
-        tracks.forEach(track => {
-            if (track.id.includes("youtube.com") || track.id.includes("youtu.be")) {
-                track.id = extractVideoId(track.id);
-            }
-        });
-
         let currentTrackIndex = 0;
         let player = null;
         let isPlaying = false;
-        let apiLoaded = false;
 
-        // Load YouTube Player API Asynchronously
-        var tag = document.createElement('script');
-        tag.src = "https://youtube.com";
-        var firstScriptTag = document.getElementsByTagName('script')[0];
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-        // This function MUST be global for the YouTube API to trigger it
-        function onYouTubeIframeAPIReady() {
-            apiLoaded = true;
+        // Force script execution initialization securely
+        window.onYouTubeIframeAPIReady = function() {
             player = new YT.Player('youtube-core-player', {
                 videoId: tracks[currentTrackIndex].id,
                 playerVars: {
                     'playsinline': 1,
-                    'controls': 0,
-                    'disablekb': 1,
-                    'modestbranding': 1,
-                    'rel': 0
+                    'controls': 1,
+                    'enablejsapi': 1,
+                    'origin': window.location.origin // Mandated for GitHub Pages live cross-origin communication
                 },
                 events: {
                     'onReady': onPlayerReady,
@@ -160,7 +144,15 @@
                 }
             });
             buildPlaylistUI();
-        }
+        };
+
+        // Inject the external script tag safely down the line
+        (function() {
+            var tag = document.createElement('script');
+            tag.src = "https://www.youtube.com/iframe_api";
+            var firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        })();
 
         function onPlayerReady(event) {
             updateTrackUI();
@@ -185,15 +177,12 @@
         }
 
         function onPlayerError(event) {
-            console.error("YouTube Player Error:", event.data);
-            document.getElementById('status').innerText = "Error: Video unplayable or restricted.";
+            console.error("YouTube Error State Code:", event.data);
+            document.getElementById('status').innerText = "Error: Video restricted or disabled for embeds.";
         }
 
         function togglePlayback() {
-            if (!player || typeof player.playVideo !== 'function') {
-                document.getElementById('status').innerText = "Error: Player not fully loaded yet.";
-                return;
-            }
+            if (!player || typeof player.playVideo !== 'function') return;
             if (isPlaying) {
                 player.pauseVideo();
             } else {
@@ -242,19 +231,6 @@
                 container.appendChild(item);
             });
         }
-
-        function extractVideoId(url) {
-            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-            const match = url.match(regExp);
-            return (match && match[2].length === 11) ? match[2] : url;
-        }
-
-        // Diagnostic Safeguard: Checks if the API failed to load after 3 seconds
-        setTimeout(() => {
-            if (!apiLoaded) {
-                document.getElementById('status').innerText = "Connection Blocked. Check Ad-Blocker / Extensions.";
-            }
-        }, 3000);
     </script>
 </body>
 </html>
