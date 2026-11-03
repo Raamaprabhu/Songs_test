@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimalist Audio Player</title>
+    <title>Jukebox Audio Stream</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -13,92 +13,170 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
         }
         .player-card {
             background: #1e1e1e;
-            padding: 30px;
+            padding: 25px;
             border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
             text-align: center;
-            width: 300px;
+            width: 100%;
+            max-width: 360px;
         }
-        /* Completely hides the YouTube video block from the interface */
-        #youtube-audio-player {
-            display: none;
+        /* A tiny video container ensures background playback rights on mobile browsers */
+        .video-wrapper {
+            width: 100%;
+            height: 60px;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            background: #000;
         }
-        button {
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 25px;
+        }
+        .control-btn {
             background: #1db954;
             color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 25px;
-            font-size: 16px;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
             font-weight: bold;
             cursor: pointer;
-            margin-top: 15px;
-            transition: transform 0.2s;
+            transition: background 0.2s, transform 0.1s;
         }
-        button:hover {
+        .control-btn:hover {
+            background: #1ed760;
             transform: scale(1.05);
+        }
+        .playlist {
+            text-align: left;
+            border-top: 1px solid #333;
+            padding-top: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .playlist-item {
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 6px;
+            transition: background 0.2s;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            background: #282828;
+        }
+        .playlist-item:hover {
+            background: #3e3e3e;
+        }
+        .playlist-item.active {
+            background: #1db954;
+            color: white;
+            font-weight: bold;
+        }
+        #status {
+            font-size: 12px;
+            color: #b3b3b3;
+            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
 
     <div class="player-card">
-        <h3>YouTube Audio Stream</h3>
-        <p id="status">Loading Player...</p>
-        <button id="play-pause-btn" onclick="togglePlayback()">Play</button>
+        <h3 id="now-playing">Select a Track</h3>
+        <p id="status">Loading Player Engine...</p>
+
+        <!-- The miniature YouTube core window -->
+        <div class="video-wrapper">
+            <div id="youtube-core-player"></div>
+        </div>
+
+        <div class="controls">
+            <button class="control-btn" onclick="previousTrack()">Prev</button>
+            <button class="control-btn" id="play-pause-btn" onclick="togglePlayback()">Play</button>
+            <button class="control-btn" onclick="nextTrack()">Next</button>
+        </div>
+
+        <div class="playlist" id="playlist-container">
+            <!-- Playlist items will be built dynamically here -->
+        </div>
     </div>
 
-    <!-- Hidden YouTube Player Container -->
-    <div id="youtube-audio-player"></div>
-
     <script>
-        // Load the YouTube IFrame Player API asynchronously
+        // 1. ADD YOUR YOUTUBE URLS / VIDEOS HERE
+        // Paste the full link or just the ID code at the end of the URL
+        const tracks = [
+            { title: "Lofi Hip Hop Beats", id: "jfKfPfyJRdk" },
+            { title: "Synthwave Radio", id: "4xDzrJKXOOY" },
+            { title: "Chill Cinematic Music", id: "dQw4w9WgXcQ" },
+            { title: "Acoustic Guitar Session", id: "kJQP7kiw5Fk" }
+        ];
+
+        // Clean up full URLs into pure IDs automatically if the user pastes regular links
+        tracks.forEach(track => {
+            if (track.id.includes("youtube.com") || track.id.includes("youtu.be")) {
+                track.id = extractVideoId(track.id);
+            }
+        });
+
+        let currentTrackIndex = 0;
+        let player;
+        let isPlaying = false;
+
+        // Load YouTube Player API
         var tag = document.createElement('script');
         tag.src = "https://youtube.com";
         var firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        var player;
-        var isPlaying = false;
-
-        // Replace 'dQw4w9WgXcQ' with your target YouTube Video ID or Music ID
-        var videoId = 'dQw4w9WgXcQ'; 
-
-        // This function creates an <iframe> (and YouTube player) after the API code downloads
         function onYouTubeIframeAPIReady() {
-            player = new YT.Player('youtube-audio-player', {
-                height: '0',
-                width: '0',
-                videoId: videoId,
+            player = new YT.Player('youtube-core-player', {
+                videoId: tracks[currentTrackIndex].id,
                 playerVars: {
-                    'playsinline': 1, // Crucial for mobile background restrictions
-                    'controls': 0,
-                    'disablekb': 1
+                    'playsinline': 1,  // Allows background execution permissions
+                    'controls': 0,     // Hides native layout controls
+                    'disablekb': 1,
+                    'modestbranding': 1,
+                    'rel': 0
                 },
                 events: {
                     'onReady': onPlayerReady,
                     'onStateChange': onPlayerStateChange
                 }
             });
+            buildPlaylistUI();
         }
 
         function onPlayerReady(event) {
+            updateTrackUI();
             document.getElementById('status').innerText = "Ready to Play";
         }
 
         function onPlayerStateChange(event) {
-            var btn = document.getElementById('play-pause-btn');
-            var statusText = document.getElementById('status');
-            
+            const btn = document.getElementById('play-pause-btn');
+            const statusText = document.getElementById('status');
+
             if (event.data == YT.PlayerState.PLAYING) {
                 btn.innerText = "Pause";
-                statusText.innerText = "Playing Audio...";
+                statusText.innerText = "Streaming Audio Track...";
                 isPlaying = true;
+            } else if (event.data == YT.PlayerState.ENDED) {
+                nextTrack(); // Automatically advance when track finishes
             } else {
                 btn.innerText = "Play";
                 statusText.innerText = "Paused";
@@ -108,12 +186,59 @@
 
         function togglePlayback() {
             if (!player) return;
-            
             if (isPlaying) {
                 player.pauseVideo();
             } else {
                 player.playVideo();
             }
+        }
+
+        function playTrack(index) {
+            currentTrackIndex = index;
+            updateTrackUI();
+            player.loadVideoById(tracks[currentTrackIndex].id);
+            player.playVideo();
+        }
+
+        function nextTrack() {
+            let nextIndex = (currentTrackIndex + 1) % tracks.length;
+            playTrack(nextIndex);
+        }
+
+        function previousTrack() {
+            let prevIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
+            playTrack(prevIndex);
+        }
+
+        function updateTrackUI() {
+            document.getElementById('now-playing').innerText = tracks[currentTrackIndex].title;
+            
+            // Highlights active track in the list layout
+            const items = document.getElementsByClassName('playlist-item');
+            for (let i = 0; i < items.length; i++) {
+                items[i].classList.remove('active');
+                if (i === currentTrackIndex) {
+                    items[i].classList.add('active');
+                }
+            }
+        }
+
+        function buildPlaylistUI() {
+            const container = document.getElementById('playlist-container');
+            container.innerHTML = "";
+            tracks.forEach((track, index) => {
+                const item = document.createElement('div');
+                item.className = "playlist-item" + (index === currentTrackIndex ? " active" : "");
+                item.innerText = `${index + 1}. ${track.title}`;
+                item.onclick = () => playTrack(index);
+                container.appendChild(item);
+            });
+        }
+
+        function extractVideoId(url) {
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = url.match(regExp);
+            return (match && match[2].length === 11) ? match[2] : url;
         }
     </script>
 </body>
