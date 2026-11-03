@@ -27,7 +27,6 @@
             width: 100%;
             max-width: 360px;
         }
-        /* A tiny video container ensures background playback rights on mobile browsers */
         .video-wrapper {
             width: 100%;
             height: 60px;
@@ -101,7 +100,6 @@
         <h3 id="now-playing">Select a Track</h3>
         <p id="status">Loading Player Engine...</p>
 
-        <!-- The miniature YouTube core window -->
         <div class="video-wrapper">
             <div id="youtube-core-player"></div>
         </div>
@@ -112,22 +110,20 @@
             <button class="control-btn" onclick="nextTrack()">Next</button>
         </div>
 
-        <div class="playlist" id="playlist-container">
-            <!-- Playlist items will be built dynamically here -->
-        </div>
+        <div class="playlist" id="playlist-container"></div>
     </div>
 
     <script>
-        // 1. ADD YOUR YOUTUBE URLS / VIDEOS HERE
-        // Paste the full link or just the ID code at the end of the URL
+        // 1. CHOOSE YOUR TRACKS
+        // For maximum safety, provide the exact 11-character Video ID as shown below
         const tracks = [
-            { title: "Lofi Hip Hop Beats", id: "https://www.youtube.com/watch?v=HRzA4mnkQhU" },
+            { title: "Lofi Hip Hop Beats", id: "jfKfPfyJRdk" },
             { title: "Synthwave Radio", id: "4xDzrJKXOOY" },
             { title: "Chill Cinematic Music", id: "dQw4w9WgXcQ" },
             { title: "Acoustic Guitar Session", id: "kJQP7kiw5Fk" }
         ];
 
-        // Clean up full URLs into pure IDs automatically if the user pastes regular links
+        // Clean full URLs into pure IDs safely
         tracks.forEach(track => {
             if (track.id.includes("youtube.com") || track.id.includes("youtu.be")) {
                 track.id = extractVideoId(track.id);
@@ -135,28 +131,32 @@
         });
 
         let currentTrackIndex = 0;
-        let player;
+        let player = null;
         let isPlaying = false;
+        let apiLoaded = false;
 
-        // Load YouTube Player API
+        // Load YouTube Player API Asynchronously
         var tag = document.createElement('script');
         tag.src = "https://youtube.com";
         var firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
+        // This function MUST be global for the YouTube API to trigger it
         function onYouTubeIframeAPIReady() {
+            apiLoaded = true;
             player = new YT.Player('youtube-core-player', {
                 videoId: tracks[currentTrackIndex].id,
                 playerVars: {
-                    'playsinline': 1,  // Allows background execution permissions
-                    'controls': 0,     // Hides native layout controls
+                    'playsinline': 1,
+                    'controls': 0,
                     'disablekb': 1,
                     'modestbranding': 1,
                     'rel': 0
                 },
                 events: {
                     'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange
+                    'onStateChange': onPlayerStateChange,
+                    'onError': onPlayerError
                 }
             });
             buildPlaylistUI();
@@ -176,7 +176,7 @@
                 statusText.innerText = "Streaming Audio Track...";
                 isPlaying = true;
             } else if (event.data == YT.PlayerState.ENDED) {
-                nextTrack(); // Automatically advance when track finishes
+                nextTrack();
             } else {
                 btn.innerText = "Play";
                 statusText.innerText = "Paused";
@@ -184,8 +184,16 @@
             }
         }
 
+        function onPlayerError(event) {
+            console.error("YouTube Player Error:", event.data);
+            document.getElementById('status').innerText = "Error: Video unplayable or restricted.";
+        }
+
         function togglePlayback() {
-            if (!player) return;
+            if (!player || typeof player.playVideo !== 'function') {
+                document.getElementById('status').innerText = "Error: Player not fully loaded yet.";
+                return;
+            }
             if (isPlaying) {
                 player.pauseVideo();
             } else {
@@ -194,6 +202,7 @@
         }
 
         function playTrack(index) {
+            if (!player || typeof player.loadVideoById !== 'function') return;
             currentTrackIndex = index;
             updateTrackUI();
             player.loadVideoById(tracks[currentTrackIndex].id);
@@ -213,7 +222,6 @@
         function updateTrackUI() {
             document.getElementById('now-playing').innerText = tracks[currentTrackIndex].title;
             
-            // Highlights active track in the list layout
             const items = document.getElementsByClassName('playlist-item');
             for (let i = 0; i < items.length; i++) {
                 items[i].classList.remove('active');
@@ -240,6 +248,13 @@
             const match = url.match(regExp);
             return (match && match[2].length === 11) ? match[2] : url;
         }
+
+        // Diagnostic Safeguard: Checks if the API failed to load after 3 seconds
+        setTimeout(() => {
+            if (!apiLoaded) {
+                document.getElementById('status').innerText = "Connection Blocked. Check Ad-Blocker / Extensions.";
+            }
+        }, 3000);
     </script>
 </body>
 </html>
