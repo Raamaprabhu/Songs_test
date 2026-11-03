@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jukebox Audio Stream</title>
+    <title>Cloud Audio Streaming Jukebox</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -20,39 +20,37 @@
         }
         .player-card {
             background: #1e1e1e;
-            padding: 25px;
-            border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
             text-align: center;
             width: 100%;
             max-width: 360px;
         }
-        /* Increased heights ensure Chrome security policies recognize the active player session */
-        .video-wrapper {
-            width: 100%;
-            height: 180px; 
-            border-radius: 8px;
-            overflow: hidden;
-            margin-bottom: 20px;
-            background: #000;
-        }
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
+        .audio-wave-placeholder {
+            width: 80px;
+            height: 80px;
+            background: #282828;
+            border-radius: 50%;
+            margin: 0 auto 20px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
         }
         .controls {
             display: flex;
             justify-content: space-around;
-            margin-bottom: 25px;
+            align-items: center;
+            margin: 25px 0;
         }
         .control-btn {
             background: #1db954;
             color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 20px;
-            font-size: 14px;
+            padding: 12px 28px;
+            border-radius: 25px;
+            font-size: 15px;
             font-weight: bold;
             cursor: pointer;
             transition: background 0.2s, transform 0.1s;
@@ -61,11 +59,23 @@
             background: #1ed760;
             transform: scale(1.05);
         }
+        .nav-btn {
+            background: transparent;
+            color: #b3b3b3;
+            border: 1px solid #404040;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+        .nav-btn:hover {
+            color: white;
+            border-color: white;
+        }
         .playlist {
             text-align: left;
             border-top: 1px solid #333;
             padding-top: 15px;
-            max-height: 200px;
+            max-height: 180px;
             overflow-y: auto;
         }
         .playlist-item {
@@ -75,9 +85,6 @@
             margin-bottom: 6px;
             transition: background 0.2s;
             font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
             background: #282828;
         }
         .playlist-item:hover {
@@ -89,128 +96,108 @@
             font-weight: bold;
         }
         #status {
-            font-size: 12px;
+            font-size: 13px;
             color: #b3b3b3;
-            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
 
     <div class="player-card">
+        <div class="audio-wave-placeholder">🎵</div>
         <h3 id="now-playing">Select a Track</h3>
-        <p id="status">Loading Player Engine...</p>
-
-        <div class="video-wrapper">
-            <div id="youtube-core-player"></div>
-        </div>
+        <p id="status">System Ready</p>
 
         <div class="controls">
-            <button class="control-btn" onclick="previousTrack()">Prev</button>
+            <button class="nav-btn" onclick="previousTrack()">Prev</button>
             <button class="control-btn" id="play-pause-btn" onclick="togglePlayback()">Play</button>
-            <button class="control-btn" onclick="nextTrack()">Next</button>
+            <button class="nav-btn" onclick="nextTrack()">Next</button>
         </div>
 
         <div class="playlist" id="playlist-container"></div>
     </div>
 
     <script>
-        // Exact 11-Character YouTube IDs
+        // 1. CONFIGURE YOUR REAL MUSIC LINKS HERE
+        // Replace these URLs with real .mp3 links. They can be relative files in your GitHub folder or online direct file streams.
         const tracks = [
-            { title: "Lofi Hip Hop Beats", id: "jfKfPfyJRdk" },
-            { title: "Synthwave Radio", id: "4xDzrJKXOOY" },
-            { title: "Chill Cinematic Music", id: "dQw4w9WgXcQ" },
-            { title: "Acoustic Guitar Session", id: "kJQP7kiw5Fk" }
+            { title: "Ambient Chill Vibe", url: "https://soundhelix.com" },
+            { title: "Lofi Study Beats", url: "https://soundhelix.com" },
+            { title: "Synthwave Nightdrive", url: "https://soundhelix.com" }
         ];
 
         let currentTrackIndex = 0;
-        let player = null;
         let isPlaying = false;
+        
+        // Native browser background audio pipeline allocation
+        let audioNode = new Audio();
 
-        // Force script execution initialization securely
-        window.onYouTubeIframeAPIReady = function() {
-            player = new YT.Player('youtube-core-player', {
-                videoId: tracks[currentTrackIndex].id,
-                playerVars: {
-                    'playsinline': 1,
-                    'controls': 1,
-                    'enablejsapi': 1,
-                    'origin': window.location.origin // Mandated for GitHub Pages live cross-origin communication
-                },
-                events: {
-                    'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange,
-                    'onError': onPlayerError
-                }
+        // Build the playlist panel
+        function buildPlaylistUI() {
+            const container = document.getElementById('playlist-container');
+            container.innerHTML = "";
+            tracks.forEach((track, index) => {
+                const item = document.createElement('div');
+                item.className = "playlist-item" + (index === currentTrackIndex ? " active" : "");
+                item.innerText = `${index + 1}. ${track.title}`;
+                item.onclick = () => loadAndPlayTrack(index);
+                container.appendChild(item);
             });
-            buildPlaylistUI();
-        };
+        }
 
-        // Inject the external script tag safely down the line
-        (function() {
-            var tag = document.createElement('script');
-            tag.src = "https://www.youtube.com/iframe_api";
-            var firstScriptTag = document.getElementsByTagName('script')[0];
-            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-        })();
-
-        function onPlayerReady(event) {
+        function loadAndPlayTrack(index) {
+            currentTrackIndex = index;
+            audioNode.src = tracks[currentTrackIndex].url;
+            audioNode.load();
+            
             updateTrackUI();
-            document.getElementById('status').innerText = "Ready to Play";
-        }
-
-        function onPlayerStateChange(event) {
-            const btn = document.getElementById('play-pause-btn');
-            const statusText = document.getElementById('status');
-
-            if (event.data == YT.PlayerState.PLAYING) {
-                btn.innerText = "Pause";
-                statusText.innerText = "Streaming Audio Track...";
-                isPlaying = true;
-            } else if (event.data == YT.PlayerState.ENDED) {
-                nextTrack();
-            } else {
-                btn.innerText = "Play";
-                statusText.innerText = "Paused";
-                isPlaying = false;
-            }
-        }
-
-        function onPlayerError(event) {
-            console.error("YouTube Error State Code:", event.data);
-            document.getElementById('status').innerText = "Error: Video restricted or disabled for embeds.";
+            
+            audioNode.play()
+                .then(() => {
+                    isPlaying = true;
+                    document.getElementById('play-pause-btn').innerText = "Pause";
+                    document.getElementById('status').innerText = "Streaming Audio Content...";
+                    activateMediaSessionControls();
+                })
+                .catch(err => {
+                    console.error("Playback block: ", err);
+                    document.getElementById('status').innerText = "Load error. Verify link address.";
+                });
         }
 
         function togglePlayback() {
-            if (!player || typeof player.playVideo !== 'function') return;
-            if (isPlaying) {
-                player.pauseVideo();
-            } else {
-                player.playVideo();
+            // Initial interaction safeguard fallback
+            if (!audioNode.src) {
+                loadAndPlayTrack(0);
+                return;
             }
-        }
 
-        function playTrack(index) {
-            if (!player || typeof player.loadVideoById !== 'function') return;
-            currentTrackIndex = index;
-            updateTrackUI();
-            player.loadVideoById(tracks[currentTrackIndex].id);
-            player.playVideo();
+            if (isPlaying) {
+                audioNode.pause();
+                isPlaying = false;
+                document.getElementById('play-pause-btn').innerText = "Play";
+                document.getElementById('status').innerText = "Paused";
+            } else {
+                audioNode.play().then(() => {
+                    isPlaying = true;
+                    document.getElementById('play-pause-btn').innerText = "Pause";
+                    document.getElementById('status').innerText = "Streaming Audio Content...";
+                });
+            }
         }
 
         function nextTrack() {
             let nextIndex = (currentTrackIndex + 1) % tracks.length;
-            playTrack(nextIndex);
+            loadAndPlayTrack(nextIndex);
         }
 
         function previousTrack() {
             let prevIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
-            playTrack(prevIndex);
+            loadAndPlayTrack(prevIndex);
         }
 
         function updateTrackUI() {
             document.getElementById('now-playing').innerText = tracks[currentTrackIndex].title;
-            
             const items = document.getElementsByClassName('playlist-item');
             for (let i = 0; i < items.length; i++) {
                 items[i].classList.remove('active');
@@ -220,17 +207,32 @@
             }
         }
 
-        function buildPlaylistUI() {
-            const container = document.getElementById('playlist-container');
-            container.innerHTML = "";
-            tracks.forEach((track, index) => {
-                const item = document.createElement('div');
-                item.className = "playlist-item" + (index === currentTrackIndex ? " active" : "");
-                item.innerText = `${index + 1}. ${track.title}`;
-                item.onclick = () => playTrack(index);
-                container.appendChild(item);
-            });
+        // Automatic queue sequencing
+        audioNode.addEventListener('ended', () => {
+            nextTrack();
+        });
+
+        // Ties background process directly into Windows/Mac/iOS/Android OS notification layers
+        function activateMediaSessionControls() {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: tracks[currentTrackIndex].title,
+                    artist: 'Personal Jukebox',
+                    album: 'GitHub Pages Cloud'
+                });
+
+                navigator.mediaSession.setActionHandler('play', () => togglePlayback());
+                navigator.mediaSession.setActionHandler('pause', () => togglePlayback());
+                navigator.mediaSession.setActionHandler('previoustrack', () => previousTrack());
+                navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+            }
         }
+
+        // Initialize setup on frame load completion
+        window.onload = () => {
+            buildPlaylistUI();
+            document.getElementById('now-playing').innerText = tracks[0].title;
+        };
     </script>
 </body>
 </html>
