@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Music</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --text:#1c1c22; --muted:#6b6b78; --accent:#6c4cf1; --line:#e4e4ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14141a; --card:#1e1e27; --text:#f1f1f5; --muted:#9a9aa8; --accent:#8d74ff; --line:#2c2c38; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; padding-bottom:150px; }
+  header { padding:20px 16px 8px; max-width:720px; margin:auto; }
+  h1 { margin:0; font-size:1.5rem; }
+  #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; padding:12px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; }
+  li.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  li .n { color:var(--muted); width:28px; flex-shrink:0; font-size:.85rem; }
+  li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); }
+  #player .in { max-width:720px; margin:auto; }
+  #now { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
+  audio { width:100%; }
+  .ctrl { display:flex; gap:8px; justify-content:center; margin-top:8px; }
+  .ctrl button { border:1px solid var(--line); background:var(--bg); color:var(--text); padding:8px 14px; border-radius:8px; font-size:.95rem; cursor:pointer; }
+  .ctrl button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 My Music</h1>
+  <div id="status">Loading…</div>
+  <input id="search" type="search" placeholder="Search songs">
+</header>
+<ul id="list"></ul>
+
+<div id="player"><div class="in">
+  <div id="now">Select a song</div>
+  <audio id="audio" controls preload="none"></audio>
+  <div class="ctrl">
+    <button id="prev">⏮ Prev</button>
+    <button id="next">Next ⏭</button>
+    <button id="shuffle">🔀 Shuffle</button>
+    <button id="repeat">🔁 Repeat</button>
+  </div>
+</div></div>
+
+<script>
+/* ========== CONFIG ========== */
+const FOLDER_ID = "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV";
+// Create a free key: Google Cloud Console > enable "Google Drive API" > Credentials > API key.
+// Folder must be shared as "Anyone with the link: Viewer".
+const API_KEY = "PASTE_YOUR_API_KEY_HERE";
+
+// Optional manual list (used if API key isn't set). Get the ID from each file's share link:
+// https://drive.google.com/file/d/FILE_ID/view
+const MANUAL_SONGS = [
+  // { name: "Song name", id: "FILE_ID" },
+];
+/* ============================ */
+
+const audio = document.getElementById("audio");
+const listEl = document.getElementById("list");
+const statusEl = document.getElementById("status");
+let songs = [], view = [], current = -1, shuffle = false, repeat = false;
+
+const srcFor = id => API_KEY && !API_KEY.startsWith("PASTE")
+  ? `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${API_KEY}`
+  : `https://drive.google.com/uc?export=download&id=${id}`;
+
+async function loadSongs() {
+  if (API_KEY && !API_KEY.startsWith("PASTE")) {
+    let token = "", all = [];
+    do {
+      const q = encodeURIComponent(`'${FOLDER_ID}' in parents and mimeType contains 'audio/' and trashed=false`);
+      const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Drive API error " + res.status);
+      const data = await res.json();
+      all = all.concat(data.files); token = data.nextPageToken || "";
+    } while (token);
+    return all.map(f => ({ name: f.name.replace(/\.mp3$/i, ""), id: f.id }));
+  }
+  return MANUAL_SONGS;
+}
+
+function render() {
+  const term = document.getElementById("search").value.toLowerCase();
+  view = songs.filter(s => s.name.toLowerCase().includes(term));
+  listEl.innerHTML = "";
+  view.forEach((s, i) => {
+    const li = document.createElement("li");
+    if (songs[current] === s) li.className = "active";
+    li.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span>`;
+    li.querySelector(".t").textContent = s.name;
+    li.onclick = () => play(songs.indexOf(s));
+    listEl.appendChild(li);
+  });
+}
+
+function play(i) {
+  if (i < 0 || i >= songs.length) return;
+  current = i;
+  const s = songs[i];
+  audio.src = srcFor(s.id);
+  audio.play().catch(() => {});
+  document.getElementById("now").textContent = s.name;
+  document.title = s.name;
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: s.name, artist: "My Music" });
+  }
+  render();
+}
+
+function next() {
+  if (!songs.length) return;
+  play(shuffle ? Math.floor(Math.random() * songs.length) : (current + 1) % songs.length);
+}
+function prev() { if (songs.length) play((current - 1 + songs.length) % songs.length); }
+
+// Lock-screen / notification controls so playback continues when minimized
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("play", () => audio.play());
+  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  navigator.mediaSession.setActionHandler("nexttrack", next);
+  navigator.mediaSession.setActionHandler("previoustrack", prev);
+}
+
+audio.addEventListener("ended", () => repeat ? play(current) : next());
+audio.addEventListener("error", () => { if (current >= 0) statusEl.textContent = "Couldn't play this song. Check folder sharing settings."; });
+document.getElementById("next").onclick = next;
+document.getElementById("prev").onclick = prev;
+document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
+document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
+document.getElementById("search").oninput = render;
+
+loadSongs().then(list => {
+  songs = list;
+  statusEl.textContent = songs.length ? `${songs.length} songs` : "No songs yet. Add your API key or MANUAL_SONGS in the code.";
+  render();
+}).catch(err => { statusEl.textContent = err.message; });
+</script>
+</body>
+</html>
