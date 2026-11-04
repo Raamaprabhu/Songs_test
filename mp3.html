@@ -53,7 +53,7 @@
 const FOLDER_ID = "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV";
 // Create a free key: Google Cloud Console > enable "Google Drive API" > Credentials > API key.
 // Folder must be shared as "Anyone with the link: Viewer".
-const API_KEY = "PASTE_YOUR_API_KEY_HERE";
+const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
 
 // Optional manual list (used if API key isn't set). Get the ID from each file's share link:
 // https://drive.google.com/file/d/FILE_ID/view
@@ -70,9 +70,14 @@ const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
 
-const srcFor = id => API_KEY && !API_KEY.startsWith("PASTE")
-  ? `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${API_KEY}`
-  : `https://drive.google.com/uc?export=download&id=${id}`;
+const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
+// Link types tried in order until one plays
+const sourcesFor = id => [
+  ...(hasKey ? [`https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${API_KEY}`] : []),
+  `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
+  `https://drive.google.com/uc?export=download&id=${id}&confirm=t`
+];
+let srcTry = 0;
 
 async function loadSongs() {
   if (API_KEY && !API_KEY.startsWith("PASTE")) {
@@ -108,7 +113,10 @@ function play(i) {
   if (i < 0 || i >= songs.length) return;
   current = i;
   const s = songs[i];
-  audio.src = srcFor(s.id);
+  srcTry = 0;
+  statusEl.textContent = songs.length + " songs";
+  audio.referrerPolicy = "no-referrer";
+  audio.src = sourcesFor(s.id)[0];
   audio.play().catch(() => {});
   document.getElementById("now").textContent = s.name;
   document.title = s.name;
@@ -133,7 +141,17 @@ if ("mediaSession" in navigator) {
 }
 
 audio.addEventListener("ended", () => repeat ? play(current) : next());
-audio.addEventListener("error", () => { if (current >= 0) statusEl.textContent = "Couldn't play this song. Check folder sharing settings."; });
+audio.addEventListener("error", () => {
+  if (current < 0) return;
+  const list = sourcesFor(songs[current].id);
+  if (++srcTry < list.length) {
+    audio.src = list[srcTry];
+    audio.play().catch(() => {});
+  } else {
+    const code = audio.error ? audio.error.code : "?";
+    statusEl.textContent = "Couldn't play (error " + code + "). Add an API key in the code, and open this page from a web host, not as a local file.";
+  }
+});
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
 document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
