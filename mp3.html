@@ -14,6 +14,7 @@
   header { padding:20px 16px 8px; max-width:720px; margin:auto; }
   h1 { margin:0; font-size:1.5rem; }
   #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
   li { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; padding:12px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; }
@@ -33,6 +34,7 @@
 <header>
   <h1>🎵 My Music</h1>
   <div id="status">Loading…</div>
+  <select id="folder" class="sel"></select>
   <input id="search" type="search" placeholder="Search songs">
 </header>
 <ul id="list"></ul>
@@ -50,7 +52,11 @@
 
 <script>
 /* ========== CONFIG ========== */
-const FOLDER_ID = "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV";
+// Add as many folders as you like. "name" is just the label shown in the dropdown.
+const FOLDERS = [
+  { name: "Tamil Old songs", id: "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV" },
+  { name: "Tamil New songs", id: "1bDUQE5MT8fxmLrUbX44E7FIrSaktKfQ2" },
+];
 // Create a free key: Google Cloud Console > enable "Google Drive API" > Credentials > API key.
 // Folder must be shared as "Anyone with the link: Viewer".
 const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
@@ -58,8 +64,7 @@ const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
 // Optional manual list (used if API key isn't set). Get the ID from each file's share link:
 // https://drive.google.com/file/d/FILE_ID/view
 const MANUAL_SONGS = [
-  // { name: "Song name", id: "FILE_ID" },
-
+  // { name: "Song name", id: "FILE_ID", folder: "Music" },
 ];
 /* ============================ */
 
@@ -77,25 +82,31 @@ const sourcesFor = id => [
 ];
 let srcTry = 0;
 
+async function loadFolder(folder) {
+  let token = "", all = [];
+  do {
+    const q = encodeURIComponent(`'${folder.id}' in parents and mimeType contains 'audio/' and trashed=false`);
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Drive API error ${res.status} (folder: ${folder.name})`);
+    const data = await res.json();
+    all = all.concat(data.files); token = data.nextPageToken || "";
+  } while (token);
+  return all.map(f => ({ name: f.name.replace(/\.mp3$/i, ""), id: f.id, folder: folder.name }));
+}
+
 async function loadSongs() {
-  if (API_KEY && !API_KEY.startsWith("PASTE")) {
-    let token = "", all = [];
-    do {
-      const q = encodeURIComponent(`'${FOLDER_ID}' in parents and mimeType contains 'audio/' and trashed=false`);
-      const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Drive API error " + res.status);
-      const data = await res.json();
-      all = all.concat(data.files); token = data.nextPageToken || "";
-    } while (token);
-    return all.map(f => ({ name: f.name.replace(/\.mp3$/i, ""), id: f.id }));
+  if (hasKey) {
+    const parts = await Promise.all(FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(loadFolder));
+    return parts.flat();
   }
-  return MANUAL_SONGS;
+  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs" }));
 }
 
 function render() {
   const term = document.getElementById("search").value.toLowerCase();
-  view = songs.filter(s => s.name.toLowerCase().includes(term));
+  const fol = document.getElementById("folder").value;
+  view = songs.filter(s => (fol === "__all" || s.folder === fol) && s.name.toLowerCase().includes(term));
   listEl.innerHTML = "";
   view.forEach((s, i) => {
     const li = document.createElement("li");
@@ -125,10 +136,16 @@ function play(i) {
 }
 
 function next() {
-  if (!songs.length) return;
-  play(shuffle ? Math.floor(Math.random() * songs.length) : (current + 1) % songs.length);
+  if (!view.length) return;
+  if (shuffle) return play(songs.indexOf(view[Math.floor(Math.random() * view.length)]));
+  const pos = view.indexOf(songs[current]);
+  play(songs.indexOf(view[(pos + 1) % view.length]));
 }
-function prev() { if (songs.length) play((current - 1 + songs.length) % songs.length); }
+function prev() {
+  if (!view.length) return;
+  const pos = view.indexOf(songs[current]);
+  play(songs.indexOf(view[(pos - 1 + view.length) % view.length]));
+}
 
 // Lock-screen / notification controls so playback continues when minimized
 if ("mediaSession" in navigator) {
@@ -155,9 +172,14 @@ document.getElementById("prev").onclick = prev;
 document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
 document.getElementById("search").oninput = render;
+document.getElementById("folder").onchange = render;
 
 loadSongs().then(list => {
   songs = list;
+  const sel = document.getElementById("folder");
+  sel.innerHTML = '<option value="__all">All folders</option>' +
+    [...new Set(songs.map(x => x.folder))].map(n => `<option></option>`).join("");
+  [...new Set(songs.map(x => x.folder))].forEach((n, i) => { sel.options[i + 1].value = n; sel.options[i + 1].textContent = n; });
   statusEl.textContent = songs.length ? `${songs.length} songs` : "No songs yet. Add your API key or MANUAL_SONGS in the code.";
   render();
 }).catch(err => { statusEl.textContent = err.message; });
