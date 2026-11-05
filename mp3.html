@@ -78,6 +78,9 @@ const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
 let autoplay = true, failCount = 0;
+let planned = null;          // {from, idx}: which song will follow the current one
+const prefetched = {};       // song id -> blob: URL (next song downloaded ahead of time)
+let wakeLock = null;
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
 const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
@@ -113,6 +116,7 @@ async function loadSongs() {
 function render() {
   const term = document.getElementById("search").value.toLowerCase();
   const fol = document.getElementById("folder").value;
+  planned = null;
   view = songs.filter(s => (fol === "__all" || s.folder === fol) && s.name.toLowerCase().includes(term));
   listEl.innerHTML = "";
   view.forEach((s, i) => {
@@ -132,7 +136,7 @@ function play(i) {
   srcTry = 0;
   statusEl.textContent = songs.length + " songs";
   audio.referrerPolicy = "no-referrer";
-  audio.src = sourcesFor(s.id)[0];
+  audio.src = prefetched[s.id] || sourcesFor(s.id)[0];
   audio.play().catch(() => {});
   document.getElementById("now").textContent = s.name;
   document.title = s.name;
@@ -142,12 +146,49 @@ function play(i) {
   render();
 }
 
-function next() {
-  if (!view.length) return;
-  if (shuffle) return play(songs.indexOf(view[Math.floor(Math.random() * view.length)]));
+function pickNext() {
+  if (!view.length) return -1;
+  if (shuffle) return songs.indexOf(view[Math.floor(Math.random() * view.length)]);
   const pos = view.indexOf(songs[current]);
-  play(songs.indexOf(view[(pos + 1) % view.length]));
+  return songs.indexOf(view[(pos + 1) % view.length]);
 }
+function next() {
+  const idx = (planned && planned.from === current) ? planned.idx : pickNext();
+  if (idx >= 0) play(idx);
+}
+
+// Download the NEXT song while the current one plays, so switching needs no network
+// (network requests get paused when the screen is off / app is in background).
+async function prefetchNext() {
+  const idx = pickNext();
+  if (idx < 0) return;
+  planned = { from: current, idx };
+  const keep = new Set([songs[current].id, songs[idx].id]);
+  for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
+  const t = songs[idx];
+  if (prefetched[t.id]) return;
+  try {
+    const res = await fetch(sourcesFor(t.id)[0]);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    if (planned && planned.idx === idx) prefetched[t.id] = URL.createObjectURL(blob);
+  } catch (e) { /* falls back to normal streaming */ }
+}
+
+// Keep the screen / system awake while music plays
+async function lockScreen() {
+  try {
+    if ("wakeLock" in navigator && !wakeLock && document.visibilityState === "visible") {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch (e) {}
+}
+function unlockScreen() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+audio.addEventListener("play", lockScreen);
+audio.addEventListener("pause", () => setTimeout(() => { if (audio.paused) unlockScreen(); }, 2000)); // ignore the brief pause between songs
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && !audio.paused) lockScreen(); });
+
 function prev() {
   if (!view.length) return;
   const pos = view.indexOf(songs[current]);
@@ -171,7 +212,7 @@ if ("mediaSession" in navigator) {
 
 // Same <audio> element is reused for every track, so the browser keeps
 // playing (and moving to the next song) even when the app is minimized or the screen is locked.
-audio.addEventListener("playing", () => { failCount = 0; });
+audio.addEventListener("playing", () => { failCount = 0; prefetchNext(); });
 audio.addEventListener("ended", () => {
   if (repeat) return play(current);
   if (autoplay) return next();
@@ -180,6 +221,10 @@ audio.addEventListener("ended", () => {
 audio.addEventListener("error", () => {
   if (current < 0) return;
   const list = sourcesFor(songs[current].id);
+  if (audio.src.startsWith("blob:")) {
+    URL.revokeObjectURL(audio.src); delete prefetched[songs[current].id];
+    srcTry = 0; audio.src = list[0]; audio.play().catch(() => {}); return;
+  }
   if (++srcTry < list.length) {
     audio.src = list[srcTry];
     audio.play().catch(() => {});
@@ -192,7 +237,7 @@ audio.addEventListener("error", () => {
 });
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
-document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
+document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; planned = null; e.target.classList.toggle("on", shuffle); };
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
 document.getElementById("auto").classList.toggle("on", autoplay);
 document.getElementById("auto").onclick = e => {
