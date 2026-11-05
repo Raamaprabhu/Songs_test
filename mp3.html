@@ -41,12 +41,13 @@
 
 <div id="player"><div class="in">
   <div id="now">Select a song</div>
-  <audio id="audio" controls preload="none"></audio>
+  <audio id="audio" controls preload="auto"></audio>
   <div class="ctrl">
     <button id="prev">⏮ Prev</button>
     <button id="next">Next ⏭</button>
     <button id="shuffle">🔀 Shuffle</button>
     <button id="repeat">🔁 Repeat</button>
+    <button id="auto" class="on">▶️ Autoplay</button>
   </div>
 </div></div>
 
@@ -76,6 +77,8 @@ const audio = document.getElementById("audio");
 const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
+let autoplay = true, failCount = 0;
+try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
 const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
 // Link types tried in order until one plays
@@ -157,9 +160,23 @@ if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("pause", () => audio.pause());
   navigator.mediaSession.setActionHandler("nexttrack", next);
   navigator.mediaSession.setActionHandler("previoustrack", prev);
+  try {
+    navigator.mediaSession.setActionHandler("seekto", d => { if (d.seekTime != null) audio.currentTime = d.seekTime; });
+    navigator.mediaSession.setActionHandler("seekbackward", () => { audio.currentTime = Math.max(0, audio.currentTime - 10); });
+    navigator.mediaSession.setActionHandler("seekforward", () => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); });
+  } catch (e) {}
+  audio.addEventListener("play", () => navigator.mediaSession.playbackState = "playing");
+  audio.addEventListener("pause", () => navigator.mediaSession.playbackState = "paused");
 }
 
-audio.addEventListener("ended", () => repeat ? play(current) : next());
+// Same <audio> element is reused for every track, so the browser keeps
+// playing (and moving to the next song) even when the app is minimized or the screen is locked.
+audio.addEventListener("playing", () => { failCount = 0; });
+audio.addEventListener("ended", () => {
+  if (repeat) return play(current);
+  if (autoplay) return next();
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+});
 audio.addEventListener("error", () => {
   if (current < 0) return;
   const list = sourcesFor(songs[current].id);
@@ -169,12 +186,19 @@ audio.addEventListener("error", () => {
   } else {
     const code = audio.error ? audio.error.code : "?";
     statusEl.textContent = "Couldn't play (error " + code + "). Add an API key in the code, and open this page from a web host, not as a local file.";
+    // Don't let one bad file stop the playlist: skip ahead (max 3 in a row)
+    if (autoplay && failCount++ < 3) setTimeout(next, 800);
   }
 });
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
 document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
+document.getElementById("auto").classList.toggle("on", autoplay);
+document.getElementById("auto").onclick = e => {
+  autoplay = !autoplay; e.target.classList.toggle("on", autoplay);
+  try { localStorage.setItem("autoplay", autoplay ? "1" : "0"); } catch (err) {}
+};
 document.getElementById("search").oninput = render;
 document.getElementById("folder").onchange = render;
 
