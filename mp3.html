@@ -14,6 +14,7 @@
   header { padding:20px 16px 8px; max-width:720px; margin:auto; }
   h1 { margin:0; font-size:1.5rem; }
   #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  #dbg { color:var(--muted); font-size:.7rem; white-space:pre-wrap; margin-top:4px; }
   .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
@@ -34,6 +35,7 @@
 <header>
   <h1>🎵 My Music</h1>
   <div id="status">Loading…</div>
+  <div id="dbg"></div>
   <select id="folder" class="sel"></select>
   <input id="search" type="search" placeholder="Search songs">
 </header>
@@ -78,9 +80,14 @@ const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
 let autoplay = true, failCount = 0;
-let planned = null;          // {from, idx}: which song will follow the current one
 const prefetched = {};       // song id -> blob: URL (next song downloaded ahead of time)
-let wakeLock = null;
+let wakeLock = null, userPaused = false, lastTouch = 0;
+const dbgEl = document.getElementById("dbg"), logLines = [];
+function log(m) {
+  logLines.push(new Date().toLocaleTimeString() + " " + m);
+  if (logLines.length > 6) logLines.shift();
+  dbgEl.textContent = logLines.join("\n");
+}
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
 const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
@@ -116,7 +123,6 @@ async function loadSongs() {
 function render() {
   const term = document.getElementById("search").value.toLowerCase();
   const fol = document.getElementById("folder").value;
-  planned = null;
   view = songs.filter(s => (fol === "__all" || s.folder === fol) && s.name.toLowerCase().includes(term));
   listEl.innerHTML = "";
   view.forEach((s, i) => {
@@ -146,33 +152,48 @@ function play(i) {
   render();
 }
 
-function pickNext() {
-  if (!view.length) return -1;
-  if (shuffle) return songs.indexOf(view[Math.floor(Math.random() * view.length)]);
-  const pos = view.indexOf(songs[current]);
-  return songs.indexOf(view[(pos + 1) % view.length]);
+const PREFETCH_AHEAD = 3;   // songs downloaded in advance (cushion for when the phone's network sleeps)
+let shuffleQ = [];
+function upcoming(n) {
+  if (!view.length) return [];
+  if (shuffle) {
+    while (shuffleQ.length < n) shuffleQ.push(songs.indexOf(view[Math.floor(Math.random() * view.length)]));
+    return shuffleQ.slice(0, n);
+  }
+  const pos = view.indexOf(songs[current]), out = [];
+  for (let k = 1; k <= n && k <= view.length; k++) out.push(songs.indexOf(view[(pos + k) % view.length]));
+  return out;
 }
 function next() {
-  const idx = (planned && planned.from === current) ? planned.idx : pickNext();
-  if (idx >= 0) play(idx);
+  const q = upcoming(1);
+  if (!q.length) return;
+  if (shuffle) shuffleQ.shift();
+  play(q[0]);
 }
 
-// Download the NEXT song while the current one plays, so switching needs no network
-// (network requests get paused when the screen is off / app is in background).
+// Download the next few songs while the current one plays, so switching needs no network
+// (network is paused when the phone sleeps / the page is in the background).
+let prefetching = false, prefetchAgain = false;
 async function prefetchNext() {
-  const idx = pickNext();
-  if (idx < 0) return;
-  planned = { from: current, idx };
-  const keep = new Set([songs[current].id, songs[idx].id]);
-  for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
-  const t = songs[idx];
-  if (prefetched[t.id]) return;
+  if (prefetching) { prefetchAgain = true; return; }
+  prefetching = true;
   try {
-    const res = await fetch(sourcesFor(t.id)[0]);
-    if (!res.ok) return;
-    const blob = await res.blob();
-    if (planned && planned.idx === idx) prefetched[t.id] = URL.createObjectURL(blob);
-  } catch (e) { /* falls back to normal streaming */ }
+    const idxs = upcoming(PREFETCH_AHEAD);
+    const keep = new Set([songs[current].id, ...idxs.map(i => songs[i].id)]);
+    for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
+    for (const i of idxs) {
+      const t = songs[i];
+      if (prefetched[t.id]) continue;
+      try {
+        const res = await fetch(sourcesFor(t.id)[0]);
+        if (!res.ok) { log("prefetch failed " + res.status); break; }
+        prefetched[t.id] = URL.createObjectURL(await res.blob());
+      } catch (e) { log("prefetch error"); break; }
+    }
+  } finally {
+    prefetching = false;
+    if (prefetchAgain) { prefetchAgain = false; prefetchNext(); }
+  }
 }
 
 // Keep the screen / system awake while music plays
@@ -197,8 +218,8 @@ function prev() {
 
 // Lock-screen / notification controls so playback continues when minimized
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => audio.play());
-  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  navigator.mediaSession.setActionHandler("play", () => { userPaused = false; audio.play(); });
+  navigator.mediaSession.setActionHandler("pause", () => { userPaused = true; audio.pause(); });
   navigator.mediaSession.setActionHandler("nexttrack", next);
   navigator.mediaSession.setActionHandler("previoustrack", prev);
   try {
@@ -237,15 +258,48 @@ audio.addEventListener("error", () => {
 });
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
-document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; planned = null; e.target.classList.toggle("on", shuffle); };
+document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; shuffleQ = []; e.target.classList.toggle("on", shuffle); };
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
 document.getElementById("auto").classList.toggle("on", autoplay);
 document.getElementById("auto").onclick = e => {
   autoplay = !autoplay; e.target.classList.toggle("on", autoplay);
   try { localStorage.setItem("autoplay", autoplay ? "1" : "0"); } catch (err) {}
 };
-document.getElementById("search").oninput = render;
-document.getElementById("folder").onchange = render;
+document.getElementById("search").oninput = () => { shuffleQ = []; render(); };
+document.getElementById("folder").onchange = () => { shuffleQ = []; render(); };
+
+// ---- Keep-going safeguards ----
+document.getElementById("player").addEventListener("pointerdown", () => { lastTouch = Date.now(); });
+audio.addEventListener("play", () => { userPaused = false; });
+audio.addEventListener("pause", () => {
+  if (!audio.ended && Date.now() - lastTouch < 1500) userPaused = true;   // pressed pause on the page
+  log(audio.ended ? "song ended" : (userPaused ? "paused by you" : "paused by system"));
+});
+audio.addEventListener("error", () => log("audio error " + (audio.error ? audio.error.code : "?")));
+audio.addEventListener("waiting", () => log("buffering…"));
+
+function resumeIfNeeded(why) {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended) { log(why + ": moving to next"); repeat ? play(current) : next(); }
+  else if (audio.paused) { log(why + ": resuming"); audio.play().catch(() => {}); }
+}
+["visibilitychange", "focus", "pageshow", "online"].forEach(ev => window.addEventListener(ev, () => resumeIfNeeded(ev)));
+
+// Watchdog: catches a missed "ended", a pause forced by the system, or a stuck download
+let lastT = -1, stuck = 0;
+setInterval(() => {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended || audio.paused) { resumeIfNeeded("watchdog"); return; }
+  if (audio.currentTime === lastT && audio.readyState < 3) {
+    if (++stuck >= 4) {
+      stuck = 0; log("stuck, reloading");
+      const t = audio.currentTime;
+      audio.src = sourcesFor(songs[current].id)[0];
+      audio.addEventListener("loadedmetadata", () => { audio.currentTime = t; audio.play().catch(() => {}); }, { once: true });
+    }
+  } else stuck = 0;
+  lastT = audio.currentTime;
+}, 3000);
 
 loadSongs().then(list => {
   songs = list;
