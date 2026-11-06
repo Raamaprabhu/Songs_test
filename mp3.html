@@ -84,6 +84,7 @@ const audio = document.getElementById("audio");   // actually a <video> element;
 const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
+let rank = new Map();   // random position of each song while Shuffle is on
 let autoplay = true, failCount = 0;
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
@@ -133,6 +134,7 @@ function render() {
   const term = document.getElementById("search").value.toLowerCase();
   const fol = document.getElementById("folder").value;
   view = songs.filter(s => (fol === "__all" || s.folder === fol) && s.name.toLowerCase().includes(term));
+  if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));   // shuffled order shown on screen
   listEl.innerHTML = "";
   view.forEach((s, i) => {
     const li = document.createElement("li");
@@ -165,7 +167,6 @@ function play(i) {
 
 function next() {
   if (!view.length) return;
-  if (shuffle) return play(songs.indexOf(view[Math.floor(Math.random() * view.length)]));
   const pos = view.indexOf(songs[current]);
   play(songs.indexOf(view[(pos + 1) % view.length]));
 }
@@ -214,7 +215,22 @@ audio.addEventListener("error", () => {
 });
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
-document.getElementById("shuffle").onclick = e => { shuffle = !shuffle; e.target.classList.toggle("on", shuffle); };
+document.getElementById("shuffle").onclick = e => {
+  shuffle = !shuffle;
+  e.target.classList.toggle("on", shuffle);
+  if (shuffle) {
+    // Fisher-Yates shuffle of all songs; the song now playing goes to the top
+    const arr = songs.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    rank = new Map();
+    arr.forEach((s, i) => rank.set(s, i));
+    if (current >= 0) rank.set(songs[current], -1);
+  }
+  render();   // off = back to alphabetical order
+};
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
 document.getElementById("auto").classList.toggle("on", autoplay);
 document.getElementById("auto").onclick = e => {
