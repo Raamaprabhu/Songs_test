@@ -58,27 +58,38 @@
 
 <script>
 /* ========== CONFIG ========== */
-// Add as many folders as you like. "name" is just the label shown in the dropdown.
-const FOLDERS = [
+// GROUP 1: songs from these folders are shown under "All folders" AND when the folder is selected.
+const FOLDERS_IN_ALL = [
   { name: "Tamil Old songs", id: "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV" },
   { name: "Tamil New songs", id: "1bDUQE5MT8fxmLrUbX44E7FIrSaktKfQ2" },
   { name: "Ghazals-Hariharan", id: "1cqoGNiBACCSoFSGj8t9uycv3ANYEsmfg" },
   { name: "Ghazals-Misc", id: "1j3NZEyo_K-TfHiXjf88lArqDrmWLXFMD" },
   { name: "Hindi Movie songs", id: "1kSG8VTyU1aoUTmy6w5IwwT1DTQde9eAB" },
+];
+
+// GROUP 2: songs from these folders are NOT mixed into "All folders".
+// They appear in the dropdown and are listed only when that folder is selected.
+const FOLDERS_SEPARATE = [
   { name: "Bhakti songs/Bhajans", id: "1vvm8nH44O79Gxl2vwGtq3-0JaxwacSSU" },
   { name: "Karaoke Video Songs", id: "1-x3IvbYXkE_IfDy9FIo0Ezbd9SXg7HOp" },
-  ];
+];
+
 // Create a free key: Google Cloud Console > enable "Google Drive API" > Credentials > API key.
 // Folder must be shared as "Anyone with the link: Viewer".
 const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
 
 // Optional manual list (used if API key isn't set). Get the ID from each file's share link:
 // https://drive.google.com/file/d/FILE_ID/view
-// Add  video: true  for video files.
+// Add  video: true  for video files, and  inAll: false  to keep a song out of "All folders".
 const MANUAL_SONGS = [
   // { name: "Song name", id: "FILE_ID", folder: "Music", video: false },
 ];
 /* ============================ */
+
+const FOLDERS = [
+  ...FOLDERS_IN_ALL.map(f => ({ ...f, inAll: true })),
+  ...FOLDERS_SEPARATE.map(f => ({ ...f, inAll: false }))
+];
 
 const audio = document.getElementById("audio");   // actually a <video> element; plays audio and video
 const listEl = document.getElementById("list");
@@ -118,6 +129,7 @@ async function loadFolder(folder) {
     name: f.name.replace(/\.(mp3|m4a|wav|ogg|flac|aac|mp4|m4v|mov|webm|mkv)$/i, ""),
     id: f.id,
     folder: folder.name,
+    inAll: folder.inAll,
     video: (f.mimeType || "").startsWith("video/")
   }));
 }
@@ -127,14 +139,22 @@ async function loadSongs() {
     const parts = await Promise.all(FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(loadFolder));
     return parts.flat();
   }
-  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs" }));
+  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs", inAll: m.inAll !== false }));
 }
 
 function render() {
   const term = document.getElementById("search").value.toLowerCase();
   const fol = document.getElementById("folder").value;
-  view = songs.filter(s => (fol === "__all" || s.folder === fol) && s.name.toLowerCase().includes(term));
+  // Songs that belong to the current dropdown selection
+  const scope = songs.filter(s => fol === "__all" ? s.inAll : s.folder === fol);
+  view = scope.filter(s => s.name.toLowerCase().includes(term));
   if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));   // shuffled order shown on screen
+  // Count at the top follows the selected folder (and the search, if any)
+  if (songs.length) {
+    statusEl.textContent = term
+      ? `${view.length} of ${scope.length} songs`
+      : `${scope.length} songs`;
+  }
   listEl.innerHTML = "";
   view.forEach((s, i) => {
     const li = document.createElement("li");
@@ -151,7 +171,6 @@ function play(i) {
   current = i;
   const s = songs[i];
   srcTry = 0;
-  statusEl.textContent = songs.length + " songs";
   audio.classList.toggle("is-video", !!s.video);
   audio.classList.toggle("audio-only", !s.video);
   audio.referrerPolicy = "no-referrer";
@@ -243,10 +262,16 @@ document.getElementById("folder").onchange = render;
 loadSongs().then(list => {
   songs = list;
   const sel = document.getElementById("folder");
-  sel.innerHTML = '<option value="__all">All folders</option>' +
-    [...new Set(songs.map(x => x.folder))].map(n => `<option></option>`).join("");
-  [...new Set(songs.map(x => x.folder))].forEach((n, i) => { sel.options[i + 1].value = n; sel.options[i + 1].textContent = n; });
-  statusEl.textContent = songs.length ? `${songs.length} songs` : "No songs yet. Add your API key or MANUAL_SONGS in the code.";
+  sel.innerHTML = "";
+  const addOpt = (value, label) => {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label;
+    sel.appendChild(o);
+  };
+  addOpt("__all", "All folders");
+  // Every folder from both groups is listed in the dropdown
+  [...new Set(songs.map(x => x.folder))].forEach(n => addOpt(n, n));
+  if (!songs.length) statusEl.textContent = "No songs yet. Add your API key or MANUAL_SONGS in the code.";
   render();
 }).catch(err => { statusEl.textContent = err.message; });
 </script>
