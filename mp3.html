@@ -14,6 +14,7 @@
   header { padding:20px 16px 8px; max-width:720px; margin:auto; }
   h1 { margin:0; font-size:1.5rem; }
   #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  #dbg { color:var(--muted); font-size:.7rem; white-space:pre-wrap; margin-top:4px; }
   .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
   ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
@@ -39,6 +40,7 @@
 <header>
   <h1>🎵 My Music</h1>
   <div id="status">Loading…</div>
+  <div id="dbg"></div>
   <select id="folder" class="sel"></select>
   <input id="search" type="search" placeholder="Search songs">
 </header>
@@ -95,10 +97,21 @@ const FOLDERS = [
 const audio = document.getElementById("audio");   // actually a <video> element; plays audio and video
 const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
+const dbgEl = document.getElementById("dbg");
 let songs = [], view = [], current = -1, shuffle = false, repeat = false;
 let rank = new Map();   // random position of each song while Shuffle is on
 let autoplay = true, failCount = 0;
+let wakeLock = null, userPaused = false, lastTouch = 0;
+const prefetched = {};   // song id -> blob: URL (upcoming songs downloaded ahead of time)
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
+
+// Small on-screen log (last 6 events) to help find out why playback stopped
+const logLines = [];
+function log(m) {
+  logLines.push(new Date().toLocaleTimeString() + " " + m);
+  if (logLines.length > 6) logLines.shift();
+  dbgEl.textContent = logLines.join("\n");
+}
 
 const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
 // Link types tried in order until one plays
@@ -120,7 +133,7 @@ async function loadFolder(folder) {
   let token = "", all = [];
   do {
     const q = encodeURIComponent(`'${folder.id}' in parents and (mimeType contains 'audio/' or mimeType contains 'video/') and trashed=false`);
-    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Drive API error ${res.status} (folder: ${folder.name})`);
     const data = await res.json();
@@ -131,7 +144,8 @@ async function loadFolder(folder) {
     id: f.id,
     folder: folder.name,
     inAll: folder.inAll,
-    video: (f.mimeType || "").startsWith("video/")
+    video: (f.mimeType || "").startsWith("video/"),
+    size: Number(f.size) || 0
   }));
 }
 
@@ -175,7 +189,7 @@ function play(i) {
   audio.classList.toggle("is-video", !!s.video);
   audio.classList.toggle("audio-only", !s.video);
   audio.referrerPolicy = "no-referrer";
-  audio.src = sourcesFor(s.id)[0];
+  audio.src = prefetched[s.id] || sourcesFor(s.id)[0];   // downloaded copy if we have one
   audio.play().catch(() => {});
   document.getElementById("now").textContent = (s.video ? "🎬 " : "") + s.name;
   document.title = s.name;
@@ -185,10 +199,16 @@ function play(i) {
   render();
 }
 
+// Songs that will follow the current one (follows the on-screen order, shuffled or not)
+function upcoming(n) {
+  if (!view.length) return [];
+  const pos = view.indexOf(songs[current]), out = [];
+  for (let k = 1; k <= n && k <= view.length; k++) out.push(songs.indexOf(view[(pos + k) % view.length]));
+  return out;
+}
 function next() {
-  if (!view.length) return;
-  const pos = view.indexOf(songs[current]);
-  play(songs.indexOf(view[(pos + 1) % view.length]));
+  const q = upcoming(1);
+  if (q.length) play(q[0]);
 }
 function prev() {
   if (!view.length) return;
@@ -196,10 +216,52 @@ function prev() {
   play(songs.indexOf(view[(pos - 1 + view.length) % view.length]));
 }
 
+// Download the next few songs while the current one plays, so switching needs no network
+// (the network is paused when the phone sleeps / the page is in the background).
+// Files over 40 MB (long recordings, most videos) are simply streamed instead.
+const PREFETCH_AHEAD = 3;
+let prefetching = false, prefetchAgain = false;
+async function prefetchNext() {
+  if (prefetching) { prefetchAgain = true; return; }
+  prefetching = true;
+  try {
+    if (current < 0) return;
+    const idxs = upcoming(PREFETCH_AHEAD);
+    const keep = new Set([songs[current].id, ...idxs.map(i => songs[i].id)]);
+    for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
+    for (const i of idxs) {
+      const t = songs[i];
+      if (prefetched[t.id]) continue;
+      if (t.size > 40 * 1024 * 1024) continue;
+      try {
+        const res = await fetch(sourcesFor(t.id)[0]);
+        if (!res.ok) { log("pre-download failed " + res.status); break; }
+        prefetched[t.id] = URL.createObjectURL(await res.blob());
+      } catch (e) { log("pre-download error"); break; }
+    }
+  } finally {
+    prefetching = false;
+    if (prefetchAgain) { prefetchAgain = false; prefetchNext(); }
+  }
+}
+
+// Keep the screen / system awake while music plays
+async function lockScreen() {
+  try {
+    if ("wakeLock" in navigator && !wakeLock && document.visibilityState === "visible") {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch (e) {}
+}
+function unlockScreen() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+audio.addEventListener("play", lockScreen);
+audio.addEventListener("pause", () => setTimeout(() => { if (audio.paused) unlockScreen(); }, 2000));  // ignore the brief pause between songs
+
 // Lock-screen / notification controls so playback continues when minimized
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => audio.play());
-  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  navigator.mediaSession.setActionHandler("play", () => { userPaused = false; audio.play(); });
+  navigator.mediaSession.setActionHandler("pause", () => { userPaused = true; audio.pause(); });
   navigator.mediaSession.setActionHandler("nexttrack", next);
   navigator.mediaSession.setActionHandler("previoustrack", prev);
   try {
@@ -213,7 +275,7 @@ if ("mediaSession" in navigator) {
 
 // Same media element is reused for every track, so the browser keeps
 // playing (and moving to the next song) even when the app is minimized or the screen is locked.
-audio.addEventListener("playing", () => { failCount = 0; });
+audio.addEventListener("playing", () => { failCount = 0; prefetchNext(); });
 audio.addEventListener("ended", () => {
   if (repeat) return play(current);
   if (autoplay) return next();
@@ -222,6 +284,11 @@ audio.addEventListener("ended", () => {
 audio.addEventListener("error", () => {
   if (current < 0) return;
   const list = sourcesFor(songs[current].id);
+  log("media error " + (audio.error ? audio.error.code : "?"));
+  if (audio.src.startsWith("blob:")) {   // downloaded copy failed: fall back to streaming
+    URL.revokeObjectURL(audio.src); delete prefetched[songs[current].id];
+    srcTry = 0; audio.src = list[0]; audio.play().catch(() => {}); return;
+  }
   if (++srcTry < list.length) {
     audio.src = list[srcTry];
     audio.play().catch(() => {});
@@ -233,6 +300,42 @@ audio.addEventListener("error", () => {
     if (autoplay && failCount++ < 3) setTimeout(next, 800);
   }
 });
+
+// ---- Keep-going safeguards ----
+playerEl.addEventListener("pointerdown", () => { lastTouch = Date.now(); });
+audio.addEventListener("play", () => { userPaused = false; });
+audio.addEventListener("pause", () => {
+  if (!audio.ended && Date.now() - lastTouch < 1500) userPaused = true;   // you pressed pause on the page
+  log(audio.ended ? "song ended" : (userPaused ? "paused by you" : "paused by system"));
+});
+audio.addEventListener("waiting", () => log("buffering…"));
+
+function resumeIfNeeded(why) {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended) { log(why + ": moving to next"); repeat ? play(current) : next(); }
+  else if (audio.paused) { log(why + ": resuming"); audio.play().catch(() => {}); }
+}
+["visibilitychange", "focus", "pageshow", "online"].forEach(ev => window.addEventListener(ev, () => {
+  if (ev === "visibilitychange" && document.visibilityState === "visible" && !audio.paused) lockScreen();
+  resumeIfNeeded(ev);
+}));
+
+// Watchdog: catches a missed "ended", a pause forced by the system, or a stuck download
+let lastT = -1, stuck = 0;
+setInterval(() => {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended || audio.paused) { resumeIfNeeded("watchdog"); return; }
+  if (audio.currentTime === lastT && audio.readyState < 3) {
+    if (++stuck >= 4) {
+      stuck = 0; log("stuck, reloading");
+      const t = audio.currentTime;
+      audio.src = sourcesFor(songs[current].id)[0];
+      audio.addEventListener("loadedmetadata", () => { audio.currentTime = t; audio.play().catch(() => {}); }, { once: true });
+    }
+  } else stuck = 0;
+  lastT = audio.currentTime;
+}, 3000);
+
 document.getElementById("next").onclick = next;
 document.getElementById("prev").onclick = prev;
 document.getElementById("shuffle").onclick = e => {
@@ -250,6 +353,7 @@ document.getElementById("shuffle").onclick = e => {
     if (current >= 0) rank.set(songs[current], -1);
   }
   render();   // off = back to alphabetical order
+  if (current >= 0) prefetchNext();
 };
 document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
 document.getElementById("auto").classList.toggle("on", autoplay);
