@@ -129,24 +129,68 @@ if ("ResizeObserver" in window) new ResizeObserver(fitPadding).observe(playerEl)
 window.addEventListener("resize", fitPadding);
 fitPadding();
 
-async function loadFolder(folder) {
+const folderInfo = {};   // folder name -> {count, msg}  (used to explain empty folders)
+const AV_EXT = /\.(mp3|m4a|wav|ogg|flac|aac|opus|wma|mp4|m4v|mov|webm|mkv|avi)$/i;
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
+const DRIVE = "https://www.googleapis.com/drive/v3/files";
+const SHARED = "&supportsAllDrives=true&includeItemsFromAllDrives=true";
+
+async function listChildren(parentId) {
   let token = "", all = [];
   do {
-    const q = encodeURIComponent(`'${folder.id}' in parents and (mimeType contains 'audio/' or mimeType contains 'video/') and trashed=false`);
-    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+    const q = encodeURIComponent(`'${parentId}' in parents and trashed=false`);
+    const url = `${DRIVE}?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name${SHARED}&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Drive API error ${res.status} (folder: ${folder.name})`);
+    if (!res.ok) throw new Error(`Drive API error ${res.status}`);
     const data = await res.json();
     all = all.concat(data.files); token = data.nextPageToken || "";
   } while (token);
-  return all.map(f => ({
-    name: f.name.replace(/\.(mp3|m4a|wav|ogg|flac|aac|mp4|m4v|mov|webm|mkv)$/i, ""),
-    id: f.id,
-    folder: folder.name,
-    inAll: folder.inAll,
-    video: (f.mimeType || "").startsWith("video/"),
-    size: Number(f.size) || 0
-  }));
+  return all;
+}
+
+// Collects playable files in a folder (and its sub-folders, up to 2 levels deep)
+async function collect(folder, parentId, depth, stat) {
+  let out = [];
+  for (const f of await listChildren(parentId)) {
+    if (f.mimeType === "application/vnd.google-apps.folder") {
+      if (depth < 2) out = out.concat(await collect(folder, f.id, depth + 1, stat));
+      continue;
+    }
+    const mt = f.mimeType || "";
+    const isAudio = mt.startsWith("audio/"), isVideo = mt.startsWith("video/");
+    if (!(isAudio || isVideo || AV_EXT.test(f.name))) { stat.skipped++; continue; }   // e.g. documents, images, shortcuts
+    out.push({
+      name: f.name.replace(AV_EXT, ""),
+      id: f.id,
+      folder: folder.name,
+      inAll: folder.inAll,
+      video: isVideo || (!isAudio && VIDEO_EXT.test(f.name)),
+      size: Number(f.size) || 0
+    });
+  }
+  return out;
+}
+
+async function loadFolder(folder) {
+  const stat = { skipped: 0 };
+  try {
+    const list = await collect(folder, folder.id, 0, stat);
+    let msg = "";
+    if (!list.length) {
+      // Work out WHY it is empty
+      const meta = await fetch(`${DRIVE}/${folder.id}?fields=id,name,mimeType${SHARED}&key=${API_KEY}`);
+      if (!meta.ok) msg = `can't open this folder (error ${meta.status}). Share it as "Anyone with the link: Viewer" and check the folder ID.`;
+      else if ((await meta.json()).mimeType !== "application/vnd.google-apps.folder") msg = "this ID is a file, not a folder.";
+      else msg = `no audio/video files found inside` + (stat.skipped ? ` (${stat.skipped} other files skipped)` : "") + ".";
+    }
+    folderInfo[folder.name] = { count: list.length, msg };
+    if (msg) log(`${folder.name}: ${msg}`);
+    return list;
+  } catch (e) {
+    folderInfo[folder.name] = { count: 0, msg: e.message };
+    log(`${folder.name}: ${e.message}`);
+    return [];   // one bad folder must not stop the others
+  }
 }
 
 async function loadSongs() {
@@ -165,7 +209,10 @@ function render() {
   view = scope.filter(s => s.name.toLowerCase().includes(term));
   if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));   // shuffled order shown on screen
   // Count at the top follows the selected folder (and the search, if any)
-  if (songs.length) {
+  const info = folderInfo[fol];
+  if (!scope.length && info && info.msg) {
+    statusEl.textContent = `${fol}: ${info.msg}`;
+  } else if (songs.length) {
     statusEl.textContent = term
       ? `${view.length} of ${scope.length} songs`
       : `${scope.length} songs`;
@@ -375,7 +422,9 @@ loadSongs().then(list => {
   };
   addOpt("__all", "All folders");
   // Every folder from both groups is listed in the dropdown
-  [...new Set(songs.map(x => x.folder))].forEach(n => addOpt(n, n));
+  // (built from the config, so a folder still shows even if it came back empty)
+  const names = hasKey ? FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(f => f.name) : [...new Set(songs.map(x => x.folder))];
+  names.forEach(n => addOpt(n, hasKey ? `${n} (${(folderInfo[n] || {}).count || 0})` : n));
   if (!songs.length) statusEl.textContent = "No songs yet. Add your API key or MANUAL_SONGS in the code.";
   render();
 }).catch(err => { statusEl.textContent = err.message; });
