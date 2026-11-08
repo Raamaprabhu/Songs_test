@@ -1,4 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Music</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --text:#1c1c22; --muted:#6b6b78; --accent:#6c4cf1; --line:#e4e4ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14141a; --card:#1e1e27; --text:#f1f1f5; --muted:#9a9aa8; --accent:#8d74ff; --line:#2c2c38; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; padding-bottom:150px; }
+  header { padding:20px 16px 8px; max-width:720px; margin:auto; }
+  h1 { margin:0; font-size:1.5rem; }
+  #status { color:var(--muted); font-size:.9rem; margin-top:4px; font-weight:500; }
+  #dbg { color:var(--muted); font-size:.7rem; white-space:pre-wrap; margin-top:4px; }
+  .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; padding:12px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; }
+  li.dir { font-weight:600; }
+  li.back { background:transparent; border-style:dashed; color:var(--muted); }
+  li.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  li .n { color:var(--muted); width:28px; flex-shrink:0; font-size:.85rem; }
+  li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  li .k { flex-shrink:0; font-size:.95rem; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); z-index:50; }
+  #player .in { max-width:720px; margin:auto; }
+  #now { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
+  #audio { width:100%; display:block; background:#000; border-radius:8px; }
+  #audio.audio-only { height:54px; background:transparent; }
+  #audio.is-video { height:auto; max-height:38vh; aspect-ratio:16/9; }
+  .ctrl { display:flex; gap:8px; justify-content:center; margin-top:8px; flex-wrap:wrap; }
+  .ctrl button { border:1px solid var(--line); background:var(--bg); color:var(--text); padding:8px 14px; border-radius:8px; font-size:.95rem; cursor:pointer; }
+  .ctrl button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 My Music</h1>
+  <div id="status">Starting player…</div>
+  <div id="dbg"></div>
+  <select id="folder" class="sel"></select>
+  <input id="search" type="search" placeholder="Search songs">
+</header>
+<ul id="list"></ul>
+
+<div id="player"><div class="in">
+  <div id="now">Select a song</div>
+  <video id="audio" class="audio-only" controls playsinline preload="auto"></video>
+  <div class="ctrl">
+    <button id="prev">⏮ Prev</button>
+    <button id="next">Next ⏭</button>
+    <button id="shuffle">🔀 Shuffle</button>
+    <button id="repeat">🔁 Repeat</button>
+    <button id="auto" class="on">▶️ Autoplay</button>
+  </div>
+</div></div>
+
 <script>
+// Visible error handler so screen never goes silently blank
+window.onerror = function(msg, url, line) {
+  const el = document.getElementById("status");
+  if (el) el.textContent = "Error: " + msg + " (Line " + line + ")";
+  return false;
+};
+
 /* ========== CONFIG ========== */
 const FOLDERS_IN_ALL = [
   { name: "Tamil Old songs", id: "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV" },
@@ -23,10 +90,7 @@ const FOLDERS = [
   ...FOLDERS_SEPARATE.map(f => ({ ...f, inAll: false }))
 ];
 
-const audioEl = document.getElementById("audioPlayer");
-const videoEl = document.getElementById("videoPlayer");
-let activePlayer = audioEl;
-
+const audio = document.getElementById("audio");
 const listEl = document.getElementById("list");
 const statusEl = document.getElementById("status");
 const dbgEl = document.getElementById("dbg");
@@ -34,26 +98,24 @@ let songs = [], view = [], current = -1, shuffle = false, repeat = false;
 let queue = [], currentSub = null;
 let rank = new Map();
 let autoplay = true, failCount = 0;
-let userPaused = false, lastTouch = 0;
+let wakeLock = null, userPaused = false, lastTouch = 0;
 const prefetched = {};
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
-// Silent Web Audio keep-alive to keep background process alive across songs
-let silentAudioCtx = null;
-function initKeepAlive() {
-  if (silentAudioCtx) return;
+// Audio keep-alive generator for background transitions
+let audioCtx = null;
+function playKeepAlivePulse() {
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (AudioContext) {
-      silentAudioCtx = new AudioContext();
-      const osc = silentAudioCtx.createOscillator();
-      const gain = silentAudioCtx.createGain();
-      gain.gain.value = 0.0001;
-      osc.connect(gain);
-      gain.connect(silentAudioCtx.destination);
-      osc.start();
-    }
-  } catch (e) {}
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const buffer = audioCtx.createBuffer(1, 1, 22050);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
+  } catch(e) {}
 }
 
 const logLines = [];
@@ -90,11 +152,7 @@ async function listChildren(parentId) {
     const q = encodeURIComponent(`'${parentId}' in parents and trashed=false`);
     const url = `${DRIVE}?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name${SHARED}&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
     const res = await fetch(url);
-    if (!res.ok) {
-      let bodyText = "";
-      try { const errJson = await res.json(); bodyText = errJson.error ? errJson.error.message : ""; } catch(e){}
-      throw new Error(`Drive API ${res.status}: ${bodyText || res.statusText}`);
-    }
+    if (!res.ok) throw new Error(`Drive error ${res.status}`);
     const data = await res.json();
     all = all.concat(data.files || []);
     token = data.nextPageToken || "";
@@ -116,4 +174,290 @@ async function collect(folder, parentId, sub, depth, stat) {
   let out = [];
   try {
     for (const f of await listChildren(parentId)) {
-      if (f.mimeType === FOLDER_MT) { if (depth < 2) out = out.concat(await collect(folder,
+      if (f.mimeType === FOLDER_MT) { if (depth < 2) out = out.concat(await collect(folder, f.id, sub, depth + 1, stat)); continue; }
+      const song = toSong(f, folder, sub, stat);
+      if (song) out.push(song);
+    }
+  } catch(e) {}
+  return out;
+}
+
+async function loadFolder(folder) {
+  const stat = { skipped: 0 };
+  try {
+    const kids = await listChildren(folder.id);
+    let list = [];
+    const subs = [];
+    for (const f of kids) {
+      if (f.mimeType === FOLDER_MT) { subs.push({ id: f.id, name: f.name, count: 0 }); continue; }
+      const song = toSong(f, folder, "", stat);
+      if (song) list.push(song);
+    }
+    subs.sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true }));
+    const subLists = await Promise.all(subs.map(sf => collect(folder, sf.id, sf.name, 0, stat)));
+    subs.forEach((sf, i) => { sf.count = subLists[i].length; list = list.concat(subLists[i]); });
+    let msg = "";
+    if (!list.length) msg = "no audio/video files found inside" + (stat.skipped ? ` (${stat.skipped} skipped)` : "");
+    folderInfo[folder.name] = { count: list.length, msg, subs };
+    return list;
+  } catch (e) {
+    folderInfo[folder.name] = { count: 0, msg: e.message, subs: [] };
+    log(`${folder.name}: ${e.message}`);
+    return [];
+  }
+}
+
+async function loadSongs() {
+  if (hasKey) {
+    const valid = FOLDERS.filter(f => !f.id.startsWith("PASTE"));
+    let done = 0;
+    const parts = await Promise.all(valid.map(async f => {
+      const res = await loadFolder(f);
+      done++;
+      statusEl.textContent = `Loading (${done}/${valid.length})…`;
+      return res;
+    }));
+    return parts.flat();
+  }
+  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs", sub: "", inAll: m.inAll !== false }));
+}
+
+function render() {
+  const term = (document.getElementById("search").value || "").toLowerCase();
+  const fol = document.getElementById("folder").value || "__all";
+  const info = folderInfo[fol] || {};
+  const hasSubs = fol !== "__all" && !!(info.subs && info.subs.length);
+  const atSubList = hasSubs && !term && !currentSub;
+  const inSub = hasSubs && !term && !!currentSub;
+  
+  let scope;
+  if (fol === "__all") scope = songs.filter(s => s.inAll);
+  else if (hasSubs && !term) scope = songs.filter(s => s.folder === fol && s.sub === (currentSub || ""));
+  else scope = songs.filter(s => s.folder === fol);
+  
+  view = scope.filter(s => s.name.toLowerCase().includes(term));
+  if (shuffle) view.sort((a, b) => (rank.get(a) || 0) - (rank.get(b) || 0));
+
+  if (!scope.length && !atSubList && info.msg) statusEl.textContent = `${fol}: ${info.msg}`;
+  else if (atSubList) statusEl.textContent = `${info.subs.length} folders` + (scope.length ? ` + ${scope.length} songs` : "");
+  else if (inSub) statusEl.textContent = `${fol} › ${currentSub}: ${scope.length} songs`;
+  else if (songs.length) statusEl.textContent = term ? `${view.length} of ${scope.length} songs` : `${scope.length} songs`;
+  else statusEl.textContent = "No playable files found.";
+
+  listEl.innerHTML = "";
+  const addRow = (cls, n, label, k, fn) => {
+    const li = document.createElement("li");
+    li.className = cls;
+    li.innerHTML = '<span class="n"></span><span class="t"></span><span class="k"></span>';
+    li.children[0].textContent = n; li.children[1].textContent = label; li.children[2].textContent = k;
+    li.onclick = fn;
+    listEl.appendChild(li);
+    return li;
+  };
+  if (inSub) addRow("back", "⬅", fol, "", () => { currentSub = null; render(); window.scrollTo(0, 0); });
+  if (atSubList) info.subs.forEach(sf =>
+    addRow("dir", "📁", sf.name, String(sf.count), () => { currentSub = sf.name; render(); window.scrollTo(0, 0); }));
+  view.forEach((s, i) => {
+    addRow(songs[current] === s ? "active" : "", i + 1, s.name, s.video ? "🎬" : "", () => {
+      queue = view.slice();
+      play(songs.indexOf(s));
+    });
+  });
+}
+
+function play(i) {
+  if (i < 0 || i >= songs.length) return;
+  playKeepAlivePulse();
+  current = i;
+  const s = songs[i];
+  srcTry = 0;
+  audio.classList.toggle("is-video", !!s.video);
+  audio.classList.toggle("audio-only", !s.video);
+  audio.referrerPolicy = "no-referrer";
+  audio.src = prefetched[s.id] || sourcesFor(s.id)[0];
+  const p = audio.play();
+  if (p && p.catch) p.catch(() => {});
+  document.getElementById("now").textContent = (s.video ? "🎬 " : "") + s.name;
+  document.title = s.name;
+  if ("mediaSession" in navigator) {
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: s.name, artist: s.folder || "My Music" });
+      navigator.mediaSession.playbackState = "playing";
+    } catch(e) {}
+  }
+  render();
+}
+
+function playList() { return (queue.length && queue.includes(songs[current])) ? queue : view; }
+function upcoming(n) {
+  const q = playList();
+  if (!q.length) return [];
+  const pos = q.indexOf(songs[current]), out = [];
+  for (let k = 1; k <= n && k <= q.length; k++) out.push(songs.indexOf(q[(pos + k) % q.length]));
+  return out;
+}
+function next() {
+  const q = upcoming(1);
+  if (q.length) play(q[0]);
+}
+function prev() {
+  const q = playList();
+  if (!q.length) return;
+  const pos = q.indexOf(songs[current]);
+  play(songs.indexOf(q[(pos - 1 + q.length) % q.length]));
+}
+
+const PREFETCH_AHEAD = 3;
+let prefetching = false, prefetchAgain = false;
+async function prefetchNext() {
+  if (prefetching) { prefetchAgain = true; return; }
+  prefetching = true;
+  try {
+    if (current < 0) return;
+    const idxs = upcoming(PREFETCH_AHEAD);
+    const keep = new Set([songs[current].id, ...idxs.map(i => songs[i].id)]);
+    for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
+    for (const i of idxs) {
+      const t = songs[i];
+      if (prefetched[t.id]) continue;
+      if (t.size > 40 * 1024 * 1024) continue;
+      try {
+        const res = await fetch(sourcesFor(t.id)[0]);
+        if (!res.ok) { log("pre-download failed " + res.status); break; }
+        prefetched[t.id] = URL.createObjectURL(await res.blob());
+      } catch (e) { log("pre-download error"); break; }
+    }
+  } finally {
+    prefetching = false;
+    if (prefetchAgain) { prefetchAgain = false; prefetchNext(); }
+  }
+}
+
+// Media session handlers
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("play", () => { userPaused = false; audio.play(); });
+  navigator.mediaSession.setActionHandler("pause", () => { userPaused = true; audio.pause(); });
+  navigator.mediaSession.setActionHandler("nexttrack", next);
+  navigator.mediaSession.setActionHandler("previoustrack", prev);
+  try {
+    navigator.mediaSession.setActionHandler("seekto", d => { if (d.seekTime != null) audio.currentTime = d.seekTime; });
+    navigator.mediaSession.setActionHandler("seekbackward", () => { audio.currentTime = Math.max(0, audio.currentTime - 10); });
+    navigator.mediaSession.setActionHandler("seekforward", () => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); });
+  } catch (e) {}
+}
+
+audio.addEventListener("playing", () => {
+  failCount = 0;
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+  prefetchNext();
+});
+
+audio.addEventListener("ended", () => {
+  playKeepAlivePulse(); // Keeps thread active on mobile lockscreen
+  if (repeat) return play(current);
+  if (autoplay) return next();
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+});
+
+audio.addEventListener("error", () => {
+  if (current < 0) return;
+  const list = sourcesFor(songs[current].id);
+  log("media error " + (audio.error ? audio.error.code : "?"));
+  if (audio.src.startsWith("blob:")) {
+    URL.revokeObjectURL(audio.src); delete prefetched[songs[current].id];
+    srcTry = 0; audio.src = list[0]; audio.play().catch(() => {}); return;
+  }
+  if (++srcTry < list.length) {
+    audio.src = list[srcTry];
+    audio.play().catch(() => {});
+  } else {
+    const code = audio.error ? audio.error.code : "?";
+    statusEl.textContent = "Playback error " + code;
+    if (autoplay && failCount++ < 3) setTimeout(next, 800);
+  }
+});
+
+playerEl.addEventListener("pointerdown", () => { lastTouch = Date.now(); });
+audio.addEventListener("play", () => { userPaused = false; });
+audio.addEventListener("pause", () => {
+  if (!audio.ended && Date.now() - lastTouch < 1500) userPaused = true;
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+  log(audio.ended ? "song ended" : (userPaused ? "paused by you" : "paused by system"));
+});
+audio.addEventListener("waiting", () => log("buffering…"));
+
+function resumeIfNeeded(why) {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended) { log(why + ": moving to next"); repeat ? play(current) : next(); }
+  else if (audio.paused) { log(why + ": resuming"); audio.play().catch(() => {}); }
+}
+
+["visibilitychange", "focus", "pageshow", "online"].forEach(ev => window.addEventListener(ev, () => {
+  resumeIfNeeded(ev);
+}));
+
+let lastT = -1, stuck = 0;
+setInterval(() => {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended || audio.paused) { resumeIfNeeded("watchdog"); return; }
+  if (audio.currentTime === lastT && audio.readyState < 3) {
+    if (++stuck >= 4) {
+      stuck = 0; log("stuck, reloading");
+      const t = audio.currentTime;
+      audio.src = sourcesFor(songs[current].id)[0];
+      audio.addEventListener("loadedmetadata", () => { audio.currentTime = t; audio.play().catch(() => {}); }, { once: true });
+    }
+  } else stuck = 0;
+  lastT = audio.currentTime;
+}, 3000);
+
+document.getElementById("next").onclick = next;
+document.getElementById("prev").onclick = prev;
+document.getElementById("shuffle").onclick = e => {
+  shuffle = !shuffle;
+  e.target.classList.toggle("on", shuffle);
+  if (shuffle) {
+    const arr = songs.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    rank = new Map();
+    arr.forEach((s, i) => rank.set(s, i));
+    if (current >= 0) rank.set(songs[current], -1);
+  }
+  if (queue.length) queue = queue.slice().sort(shuffle ? (a, b) => rank.get(a) - rank.get(b) : (a, b) => songs.indexOf(a) - songs.indexOf(b));
+  render();
+  if (current >= 0) prefetchNext();
+};
+document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
+document.getElementById("auto").classList.toggle("on", autoplay);
+document.getElementById("auto").onclick = e => {
+  autoplay = !autoplay; e.target.classList.toggle("on", autoplay);
+  try { localStorage.setItem("autoplay", autoplay ? "1" : "0"); } catch (err) {}
+};
+document.getElementById("search").oninput = render;
+document.getElementById("folder").onchange = () => { currentSub = null; render(); };
+
+// Safe initialization
+(async function init() {
+  try {
+    songs = await loadSongs();
+    const sel = document.getElementById("folder");
+    sel.innerHTML = "";
+    const addOpt = (value, label) => {
+      const o = document.createElement("option");
+      o.value = value; o.textContent = label;
+      sel.appendChild(o);
+    };
+    addOpt("__all", "All folders");
+    const names = hasKey ? FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(f => f.name) : [...new Set(songs.map(x => x.folder))];
+    names.forEach(n => addOpt(n, hasKey ? `${n} (${(folderInfo[n] || {}).count || 0})` : n));
+    render();
+  } catch(err) {
+    statusEl.textContent = "Init error: " + err.message;
+  }
+})();
+</script>
+</body>
+</html>
