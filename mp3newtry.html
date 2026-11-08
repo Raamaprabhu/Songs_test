@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Music</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --text:#1c1c22; --muted:#6b6b78; --accent:#6c4cf1; --line:#e4e4ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14141a; --card:#1e1e27; --text:#f1f1f5; --muted:#9a9aa8; --accent:#8d74ff; --line:#2c2c38; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; padding-bottom:150px; }
+  header { padding:20px 16px 8px; max-width:720px; margin:auto; }
+  h1 { margin:0; font-size:1.5rem; }
+  #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  #dbg { color:var(--muted); font-size:.7rem; white-space:pre-wrap; margin-top:4px; }
+  .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; padding:12px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; }
+  li.dir { font-weight:600; }
+  li.back { background:transparent; border-style:dashed; color:var(--muted); }
+  li.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  li .n { color:var(--muted); width:28px; flex-shrink:0; font-size:.85rem; }
+  li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  li .k { flex-shrink:0; font-size:.95rem; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); z-index:999; }
+  #player .in { max-width:720px; margin:auto; }
+  #now { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
+  #videoPlayer { width:100%; display:none; background:#000; border-radius:8px; height:auto; max-height:38vh; aspect-ratio:16/9; margin-bottom:8px; }
+  #audioPlayer { width:100%; display:block; height:54px; }
+  .ctrl { display:flex; gap:8px; justify-content:center; margin-top:8px; flex-wrap:wrap; }
+  .ctrl button { border:1px solid var(--line); background:var(--bg); color:var(--text); padding:8px 14px; border-radius:8px; font-size:.95rem; cursor:pointer; }
+  .ctrl button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 My Music</h1>
+  <div id="status">Loading…</div>
+  <div id="dbg"></div>
+  <select id="folder" class="sel"></select>
+  <input id="search" type="search" placeholder="Search songs">
+</header>
+<ul id="list"></ul>
+
+<div id="player"><div class="in">
+  <div id="now">Select a song</div>
+  <video id="videoPlayer" playsinline controls preload="auto"></video>
+  <audio id="audioPlayer" controls preload="auto"></audio>
+  <div class="ctrl">
+    <button id="prev">⏮ Prev</button>
+    <button id="next">Next ⏭</button>
+    <button id="shuffle">🔀 Shuffle</button>
+    <button id="repeat">🔁 Repeat</button>
+    <button id="auto" class="on">▶️ Autoplay</button>
+  </div>
+</div></div>
+
+<script>
+/* ========== CONFIG ========== */
+const FOLDERS_IN_ALL = [
+  { name: "Tamil Old songs", id: "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV" },
+  { name: "Tamil New songs", id: "1bDUQE5MT8fxmLrUbX44E7FIrSaktKfQ2" },
+  { name: "Ghazals-Hariharan", id: "1cqoGNiBACCSoFSGj8t9uycv3ANYEsmfg" },
+  { name: "Ghazals-Misc", id: "1j3NZEyo_K-TfHiXjf88lArqDrmWLXFMD" },
+  { name: "Hindi Movie songs", id: "1kSG8VTyU1aoUTmy6w5IwwT1DTQde9eAB" },
+];
+
+const FOLDERS_SEPARATE = [
+  { name: "Bhakti songs/Bhajans", id: "1vvm8nH44O79Gxl2vwGtq3-0JaxwacSSU" },
+  { name: "Bhagavatha Parayanam", id: "1IKMkUk9cUmYBI2J3Njx0ziTi38NvyTES" },
+  { name: "Karaoke Video Songs", id: "1-x3IvbYXkE_IfDy9FIo0Ezbd9SXg7HOp" },
+];
+
+const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
+const MANUAL_SONGS = [];
+/* ============================ */
+
+const FOLDERS = [
+  ...FOLDERS_IN_ALL.map(f => ({ ...f, inAll: true })),
+  ...FOLDERS_SEPARATE.map(f => ({ ...f, inAll: false }))
+];
+
+const audioEl = document.getElementById("audioPlayer");
+const videoEl = document.getElementById("videoPlayer");
+let activePlayer = audioEl;
+
+const listEl = document.getElementById("list");
+const statusEl = document.getElementById("status");
+const dbgEl = document.getElementById("dbg");
+let songs = [], view = [], current = -1, shuffle = false, repeat = false;
+let queue = [], currentSub = null;
+let rank = new Map();
+let autoplay = true, failCount = 0;
+let userPaused = false, lastTouch = 0;
+const prefetched = {};
+try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
+
+// Continuous Audio Keep-Alive via Web Audio API:
+// Keeps audio pipe active during transitions so the OS doesn't sleep the tab
+let silentAudioCtx = null;
+function initKeepAlive() {
+  if (silentAudioCtx) return;
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (AudioContext) {
+      silentAudioCtx = new AudioContext();
+      const osc = silentAudioCtx.createOscillator();
+      const gain = silentAudioCtx.createGain();
+      gain.gain.value = 0.0001; // virtually silent, but active audio stream
+      osc.connect(gain);
+      gain.connect(silentAudioCtx.destination);
+      osc.start();
+    }
+  } catch (e) {}
+}
+
+const logLines = [];
+function log(m) {
+  logLines.push(new Date().toLocaleTimeString() + " " + m);
+  if (logLines.length > 6) logLines.shift();
+  dbgEl.textContent = logLines.join("\n");
+}
+
+const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
+const sourcesFor = id => [
+  ...(hasKey ? [`https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${API_KEY}`] : []),
+  `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
+  `https://drive.google.com/uc?export=download&id=${id}&confirm=t`
+];
+let srcTry = 0;
+
+const playerEl = document.getElementById("player");
+function fitPadding() { document.body.style.paddingBottom = (playerEl.offsetHeight + 20) + "px"; }
+if ("ResizeObserver" in window) new ResizeObserver(fitPadding).observe(playerEl);
+window.addEventListener("resize", fitPadding);
+fitPadding();
+
+const folderInfo = {};
+const FOLDER_MT = "application/vnd.google-apps.folder";
+const AV_EXT = /\.(mp3|m4a|wav|ogg|flac|aac|opus|wma|mp4|m4v|mov|webm|mkv|avi)$/i;
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
+const DRIVE = "https://www.googleapis.com/drive/v3/files";
+const SHARED = "&supportsAllDrives=true&includeItemsFromAllDrives=true";
+
+async function listChildren(parentId) {
+  let token = "", all = [];
+  do {
+    const q = encodeURIComponent(`'${parentId}' in parents and trashed=false`);
+    const url = `${DRIVE}?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name${SHARED}&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Drive API error ${res.status}`);
+    const data = await res.json();
+    all = all.concat(data.files); token = data.nextPageToken || "";
+  } while (token);
+  return all;
+}
+
+function toSong(f, folder, sub, stat) {
+  const mt = f.mimeType || "";
+  const isAudio = mt.startsWith("audio/"), isVideo = mt.startsWith("video/");
+  if (!(isAudio || isVideo || AV_EXT.test(f.name))) { stat.skipped++; return null; }
+  return {
+    name: f.name.replace(AV_EXT, ""), id: f.id, folder: folder.name, sub, inAll: folder.inAll,
+    video: isVideo || (!isAudio && VIDEO_EXT.test(f.name)), size: Number(f.size) || 0
+  };
+}
+
+async function collect(folder, parentId, sub, depth, stat) {
+  let out = [];
+  for (const f of await listChildren(parentId)) {
+    if (f.mimeType === FOLDER_MT) { if (depth < 2) out = out.concat(await collect(folder, f.id, sub, depth + 1, stat)); continue; }
+    const song = toSong(f, folder, sub, stat);
+    if (song) out.push(song);
+  }
+  return out;
+}
+
+async function loadFolder(folder) {
+  const stat = { skipped: 0 };
+  try {
+    const kids = await listChildren(folder.id);
+    let list = [];
+    const subs = [];
+    for (const f of kids) {
+      if (f.mimeType === FOLDER_MT) { subs.push({ id: f.id, name: f.name, count: 0 }); continue; }
+      const song = toSong(f, folder, "", stat);
+      if (song) list.push(song);
+    }
+    subs.sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true }));
+    const subLists = await Promise.all(subs.map(sf => collect(folder, sf.id, sf.name, 0, stat)));
+    subs.forEach((sf, i) => { sf.count = subLists[i].length; list = list.concat(subLists[i]); });
+    let msg = "";
+    if (!list.length) {
+      const meta = await fetch(`${DRIVE}/${folder.id}?fields=id,name,mimeType${SHARED}&key=${API_KEY}`);
+      if (!meta.ok) msg = `can't open folder (error ${meta.status}). Check folder sharing.`;
+      else if ((await meta.json()).mimeType !== FOLDER_MT) msg = "this ID is a file, not a folder.";
+      else msg = "no audio/video files found inside" + (stat.skipped ? ` (${stat.skipped} other files skipped)` : "");
+    }
+    folderInfo[folder.name] = { count: list.length, msg, subs };
+    if (msg) log(`${folder.name}: ${msg}`);
+    return list;
+  } catch (e) {
+    folderInfo[folder.name] = { count: 0, msg: e.message, subs: [] };
+    log(`${folder.name}: ${e.message}`);
+    return [];
+  }
+}
+
+async function loadSongs() {
+  if (hasKey) {
+    const parts = await Promise.all(FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(loadFolder));
+    return parts.flat();
+  }
+  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs", sub: "", inAll: m.inAll !== false }));
+}
+
+function render() {
+  const term = document.getElementById("search").value.toLowerCase();
+  const fol = document.getElementById("folder").value;
+  const info = folderInfo[fol] || {};
+  const hasSubs = fol !== "__all" && !!(info.subs && info.subs.length);
+  const atSubList = hasSubs && !term && !currentSub;
+  const inSub = hasSubs && !term && !!currentSub;
+  let scope;
+  if (fol === "__all") scope = songs.filter(s => s.inAll);
+  else if (hasSubs && !term) scope = songs.filter(s => s.folder === fol && s.sub === (currentSub || ""));
+  else scope = songs.filter(s => s.folder === fol);
+  view = scope.filter(s => s.name.toLowerCase().includes(term));
+  if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));
