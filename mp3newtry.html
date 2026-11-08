@@ -25,7 +25,7 @@
   li .n { color:var(--muted); width:28px; flex-shrink:0; font-size:.85rem; }
   li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   li .k { flex-shrink:0; font-size:.95rem; }
-  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); z-index:999; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); }
   #player .in { max-width:720px; margin:auto; }
   #now { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
   #videoPlayer { width:100%; display:none; background:#000; border-radius:8px; height:auto; max-height:38vh; aspect-ratio:16/9; margin-bottom:8px; }
@@ -98,8 +98,7 @@ let userPaused = false, lastTouch = 0;
 const prefetched = {};
 try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
 
-// Continuous Audio Keep-Alive via Web Audio API:
-// Keeps audio pipe active during transitions so the OS doesn't sleep the tab
+// Silent Web Audio keep-alive node to avoid sleep suspension during track switch
 let silentAudioCtx = null;
 function initKeepAlive() {
   if (silentAudioCtx) return;
@@ -109,7 +108,7 @@ function initKeepAlive() {
       silentAudioCtx = new AudioContext();
       const osc = silentAudioCtx.createOscillator();
       const gain = silentAudioCtx.createGain();
-      gain.gain.value = 0.0001; // virtually silent, but active audio stream
+      gain.gain.value = 0.0001;
       osc.connect(gain);
       gain.connect(silentAudioCtx.destination);
       osc.start();
@@ -230,3 +229,11 @@ function render() {
   else scope = songs.filter(s => s.folder === fol);
   view = scope.filter(s => s.name.toLowerCase().includes(term));
   if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));
+
+  if (!scope.length && !atSubList && info.msg) statusEl.textContent = `${fol}: ${info.msg}`;
+  else if (atSubList) statusEl.textContent = `${info.subs.length} folders` + (scope.length ? ` + ${scope.length} songs` : "");
+  else if (inSub) statusEl.textContent = `${fol} › ${currentSub}: ${scope.length} songs`;
+  else if (songs.length) statusEl.textContent = term ? `${view.length} of ${scope.length} songs` : `${scope.length} songs`;
+
+  listEl.innerHTML = "";
+  const addRow = (cls, n, label, k
