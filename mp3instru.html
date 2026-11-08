@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Music</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --text:#1c1c22; --muted:#6b6b78; --accent:#6c4cf1; --line:#e4e4ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14141a; --card:#1e1e27; --text:#f1f1f5; --muted:#9a9aa8; --accent:#8d74ff; --line:#2c2c38; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; padding-bottom:150px; }
+  header { padding:20px 16px 8px; max-width:720px; margin:auto; }
+  h1 { margin:0; font-size:1.5rem; }
+  #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  #dbg { color:var(--muted); font-size:.7rem; white-space:pre-wrap; margin-top:4px; }
+  .sel { width:100%; margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  #search { width:100%; margin:12px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  ul { list-style:none; margin:0 auto; padding:0 16px; max-width:720px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; padding:12px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; }
+  li.dir { font-weight:600; }
+  li.back { background:transparent; border-style:dashed; color:var(--muted); }
+  li.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  li .n { color:var(--muted); width:28px; flex-shrink:0; font-size:.85rem; }
+  li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  li .k { flex-shrink:0; font-size:.95rem; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); }
+  #player .in { max-width:720px; margin:auto; }
+  #now { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px; }
+  /* One <video> element plays both audio and video files.
+     Audio-only files show just the control bar; video files show the picture. */
+  #audio { width:100%; display:block; background:#000; border-radius:8px; }
+  #audio.audio-only { height:54px; background:transparent; }
+  #audio.is-video { height:auto; max-height:38vh; aspect-ratio:16/9; }
+  .ctrl { display:flex; gap:8px; justify-content:center; margin-top:8px; flex-wrap:wrap; }
+  .ctrl button { border:1px solid var(--line); background:var(--bg); color:var(--text); padding:8px 14px; border-radius:8px; font-size:.95rem; cursor:pointer; }
+  .ctrl button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 My Music</h1>
+  <div id="status">Loading…</div>
+  <div id="dbg"></div>
+  <select id="folder" class="sel"></select>
+  <input id="search" type="search" placeholder="Search songs">
+</header>
+<ul id="list"></ul>
+
+<div id="player"><div class="in">
+  <div id="now">Select a song</div>
+  <video id="audio" class="audio-only" controls playsinline preload="auto"></video>
+  <div class="ctrl">
+    <button id="prev">⏮ Prev</button>
+    <button id="next">Next ⏭</button>
+    <button id="shuffle">🔀 Shuffle</button>
+    <button id="repeat">🔁 Repeat</button>
+    <button id="auto" class="on">▶️ Autoplay</button>
+  </div>
+</div></div>
+
+<script>
+/* ========== CONFIG ========== */
+// GROUP 1: songs from these folders are shown under "All folders" AND when the folder is selected.
+const FOLDERS_IN_ALL = [
+  //{ name: "Tamil Old songs", id: "1psbK5WAq4hd9H0tdcSAzjGVqhlyk4XoV" },
+  //{ name: "Tamil New songs", id: "1bDUQE5MT8fxmLrUbX44E7FIrSaktKfQ2" },
+ // { name: "Ghazals-Hariharan", id: "1cqoGNiBACCSoFSGj8t9uycv3ANYEsmfg" },
+  //{ name: "Ghazals-Misc", id: "1j3NZEyo_K-TfHiXjf88lArqDrmWLXFMD" },
+  //{ name: "Hindi Movie songs", id: "1kSG8VTyU1aoUTmy6w5IwwT1DTQde9eAB" },
+];
+
+// GROUP 2: songs from these folders are NOT mixed into "All folders".
+// They appear in the dropdown and are listed only when that folder is selected.
+const FOLDERS_SEPARATE = [
+  //{ name: "Bhakti songs/Bhajans", id: "1vvm8nH44O79Gxl2vwGtq3-0JaxwacSSU" },
+  //{ name: "Bhagavatha Parayanam", id: "1IKMkUk9cUmYBI2J3Njx0ziTi38NvyTES" },
+  //{ name: "Karaoke Video Songs", id: "1-x3IvbYXkE_IfDy9FIo0Ezbd9SXg7HOp" },
+  { name: "Instrumental_Carnatic", id: "1MRshBKamU839CzNPMM5UrD5d8l3t786t" },
+  { name: "Instrumental_Movie", id: "14-CGdqjAvrnJaCvcnI0E7AEhXmZrfItC" },
+  ];
+
+// Create a free key: Google Cloud Console > enable "Google Drive API" > Credentials > API key.
+// Folder must be shared as "Anyone with the link: Viewer".
+const API_KEY = "AIzaSyD25jQGfZwbtOBqyGrgfaTgwn8PcG2A4is";
+
+// Optional manual list (used if API key isn't set). Get the ID from each file's share link:
+// https://drive.google.com/file/d/FILE_ID/view
+// Add  video: true  for video files, and  inAll: false  to keep a song out of "All folders".
+const MANUAL_SONGS = [
+  // { name: "Song name", id: "FILE_ID", folder: "Music", video: false },
+];
+/* ============================ */
+
+const FOLDERS = [
+  ...FOLDERS_IN_ALL.map(f => ({ ...f, inAll: true })),
+  ...FOLDERS_SEPARATE.map(f => ({ ...f, inAll: false }))
+];
+
+const audio = document.getElementById("audio");   // actually a <video> element; plays audio and video
+const listEl = document.getElementById("list");
+const statusEl = document.getElementById("status");
+const dbgEl = document.getElementById("dbg");
+let songs = [], view = [], current = -1, shuffle = false, repeat = false;
+let queue = [], currentSub = null;   // queue = songs that autoplay moves through; currentSub = open sub-folder
+let rank = new Map();   // random position of each song while Shuffle is on
+let autoplay = true, failCount = 0;
+let wakeLock = null, userPaused = false, lastTouch = 0;
+const prefetched = {};   // song id -> blob: URL (upcoming songs downloaded ahead of time)
+try { const v = localStorage.getItem("autoplay"); if (v !== null) autoplay = v === "1"; } catch (e) {}
+
+// Small on-screen log (last 6 events) to help find out why playback stopped
+const logLines = [];
+function log(m) {
+  logLines.push(new Date().toLocaleTimeString() + " " + m);
+  if (logLines.length > 6) logLines.shift();
+  dbgEl.textContent = logLines.join("\n");
+}
+
+const hasKey = API_KEY && !API_KEY.startsWith("PASTE");
+// Link types tried in order until one plays
+const sourcesFor = id => [
+  ...(hasKey ? [`https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${API_KEY}`] : []),
+  `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
+  `https://drive.google.com/uc?export=download&id=${id}&confirm=t`
+];
+let srcTry = 0;
+
+// Keep the list from being hidden behind the player (it grows when a video is showing)
+const playerEl = document.getElementById("player");
+function fitPadding() { document.body.style.paddingBottom = (playerEl.offsetHeight + 20) + "px"; }
+if ("ResizeObserver" in window) new ResizeObserver(fitPadding).observe(playerEl);
+window.addEventListener("resize", fitPadding);
+fitPadding();
+
+const folderInfo = {};   // folder name -> {count, msg, subs:[{id,name,count}]}
+const FOLDER_MT = "application/vnd.google-apps.folder";
+const AV_EXT = /\.(mp3|m4a|wav|ogg|flac|aac|opus|wma|mp4|m4v|mov|webm|mkv|avi)$/i;
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
+const DRIVE = "https://www.googleapis.com/drive/v3/files";
+const SHARED = "&supportsAllDrives=true&includeItemsFromAllDrives=true";
+
+async function listChildren(parentId) {
+  let token = "", all = [];
+  do {
+    const q = encodeURIComponent(`'${parentId}' in parents and trashed=false`);
+    const url = `${DRIVE}?q=${q}&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name${SHARED}&key=${API_KEY}` + (token ? `&pageToken=${token}` : "");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Drive API error ${res.status}`);
+    const data = await res.json();
+    all = all.concat(data.files); token = data.nextPageToken || "";
+  } while (token);
+  return all;
+}
+
+function toSong(f, folder, sub, stat) {
+  const mt = f.mimeType || "";
+  const isAudio = mt.startsWith("audio/"), isVideo = mt.startsWith("video/");
+  if (!(isAudio || isVideo || AV_EXT.test(f.name))) { stat.skipped++; return null; }   // documents, images, shortcuts...
+  return {
+    name: f.name.replace(AV_EXT, ""), id: f.id, folder: folder.name, sub, inAll: folder.inAll,
+    video: isVideo || (!isAudio && VIDEO_EXT.test(f.name)), size: Number(f.size) || 0
+  };
+}
+
+// All songs inside a sub-folder (anything nested deeper is flattened into it)
+async function collect(folder, parentId, sub, depth, stat) {
+  let out = [];
+  for (const f of await listChildren(parentId)) {
+    if (f.mimeType === FOLDER_MT) { if (depth < 2) out = out.concat(await collect(folder, f.id, sub, depth + 1, stat)); continue; }
+    const song = toSong(f, folder, sub, stat);
+    if (song) out.push(song);
+  }
+  return out;
+}
+
+async function loadFolder(folder) {
+  const stat = { skipped: 0 };
+  try {
+    const kids = await listChildren(folder.id);
+    let list = [];
+    const subs = [];
+    for (const f of kids) {
+      if (f.mimeType === FOLDER_MT) { subs.push({ id: f.id, name: f.name, count: 0 }); continue; }
+      const song = toSong(f, folder, "", stat);
+      if (song) list.push(song);
+    }
+    subs.sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true }));
+    const subLists = await Promise.all(subs.map(sf => collect(folder, sf.id, sf.name, 0, stat)));
+    subs.forEach((sf, i) => { sf.count = subLists[i].length; list = list.concat(subLists[i]); });
+    let msg = "";
+    if (!list.length) {
+      // Work out WHY it is empty
+      const meta = await fetch(`${DRIVE}/${folder.id}?fields=id,name,mimeType${SHARED}&key=${API_KEY}`);
+      if (!meta.ok) msg = `can't open this folder (error ${meta.status}). Share it as "Anyone with the link: Viewer" and check the folder ID.`;
+      else if ((await meta.json()).mimeType !== FOLDER_MT) msg = "this ID is a file, not a folder.";
+      else msg = "no audio/video files found inside" + (stat.skipped ? ` (${stat.skipped} other files skipped)` : "") + ".";
+    }
+    folderInfo[folder.name] = { count: list.length, msg, subs };
+    if (msg) log(`${folder.name}: ${msg}`);
+    return list;
+  } catch (e) {
+    folderInfo[folder.name] = { count: 0, msg: e.message, subs: [] };
+    log(`${folder.name}: ${e.message}`);
+    return [];   // one bad folder must not stop the others
+  }
+}
+
+async function loadSongs() {
+  if (hasKey) {
+    const parts = await Promise.all(FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(loadFolder));
+    return parts.flat();
+  }
+  return MANUAL_SONGS.map(m => ({ ...m, folder: m.folder || "Songs", sub: "", inAll: m.inAll !== false }));
+}
+
+function render() {
+  const term = document.getElementById("search").value.toLowerCase();
+  const fol = document.getElementById("folder").value;
+  const info = folderInfo[fol] || {};
+  const hasSubs = fol !== "__all" && !!(info.subs && info.subs.length);
+  const atSubList = hasSubs && !term && !currentSub;      // showing the list of sub-folders
+  const inSub = hasSubs && !term && !!currentSub;         // showing the songs of one sub-folder
+  // Songs that belong to what is currently on screen
+  let scope;
+  if (fol === "__all") scope = songs.filter(s => s.inAll);
+  else if (hasSubs && !term) scope = songs.filter(s => s.folder === fol && s.sub === (currentSub || ""));
+  else scope = songs.filter(s => s.folder === fol);
+  view = scope.filter(s => s.name.toLowerCase().includes(term));
+  if (shuffle) view.sort((a, b) => rank.get(a) - rank.get(b));   // shuffled order shown on screen
+
+  if (!scope.length && !atSubList && info.msg) statusEl.textContent = `${fol}: ${info.msg}`;
+  else if (atSubList) statusEl.textContent = `${info.subs.length} folders` + (scope.length ? ` + ${scope.length} songs` : "");
+  else if (inSub) statusEl.textContent = `${fol} › ${currentSub}: ${scope.length} songs`;
+  else if (songs.length) statusEl.textContent = term ? `${view.length} of ${scope.length} songs` : `${scope.length} songs`;
+
+  listEl.innerHTML = "";
+  const addRow = (cls, n, label, k, fn) => {
+    const li = document.createElement("li");
+    li.className = cls;
+    li.innerHTML = '<span class="n"></span><span class="t"></span><span class="k"></span>';
+    li.children[0].textContent = n; li.children[1].textContent = label; li.children[2].textContent = k;
+    li.onclick = fn;
+    listEl.appendChild(li);
+    return li;
+  };
+  if (inSub) addRow("back", "⬅", fol, "", () => { currentSub = null; render(); window.scrollTo(0, 0); });
+  if (atSubList) info.subs.forEach(sf =>
+    addRow("dir", "📁", sf.name, String(sf.count), () => { currentSub = sf.name; render(); window.scrollTo(0, 0); }));
+  view.forEach((s, i) => {
+    const li = addRow(songs[current] === s ? "active" : "", i + 1, s.name, s.video ? "🎬" : "", () => {
+      queue = view.slice();             // autoplay continues through this list, even if you browse elsewhere
+      play(songs.indexOf(s));
+    });
+  });
+}
+
+function play(i) {
+  if (i < 0 || i >= songs.length) return;
+  current = i;
+  const s = songs[i];
+  srcTry = 0;
+  audio.classList.toggle("is-video", !!s.video);
+  audio.classList.toggle("audio-only", !s.video);
+  audio.referrerPolicy = "no-referrer";
+  audio.src = prefetched[s.id] || sourcesFor(s.id)[0];   // downloaded copy if we have one
+  audio.play().catch(() => {});
+  document.getElementById("now").textContent = (s.video ? "🎬 " : "") + s.name;
+  document.title = s.name;
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: s.name, artist: "My Music" });
+  }
+  render();
+}
+
+// Songs that will follow the current one (follows the on-screen order, shuffled or not)
+function playList() { return (queue.length && queue.includes(songs[current])) ? queue : view; }
+function upcoming(n) {
+  const q = playList();
+  if (!q.length) return [];
+  const pos = q.indexOf(songs[current]), out = [];
+  for (let k = 1; k <= n && k <= q.length; k++) out.push(songs.indexOf(q[(pos + k) % q.length]));
+  return out;
+}
+function next() {
+  const q = upcoming(1);
+  if (q.length) play(q[0]);
+}
+function prev() {
+  const q = playList();
+  if (!q.length) return;
+  const pos = q.indexOf(songs[current]);
+  play(songs.indexOf(q[(pos - 1 + q.length) % q.length]));
+}
+
+// Download the next few songs while the current one plays, so switching needs no network
+// (the network is paused when the phone sleeps / the page is in the background).
+// Files over 40 MB (long recordings, most videos) are simply streamed instead.
+const PREFETCH_AHEAD = 3;
+let prefetching = false, prefetchAgain = false;
+async function prefetchNext() {
+  if (prefetching) { prefetchAgain = true; return; }
+  prefetching = true;
+  try {
+    if (current < 0) return;
+    const idxs = upcoming(PREFETCH_AHEAD);
+    const keep = new Set([songs[current].id, ...idxs.map(i => songs[i].id)]);
+    for (const id in prefetched) if (!keep.has(id)) { URL.revokeObjectURL(prefetched[id]); delete prefetched[id]; }
+    for (const i of idxs) {
+      const t = songs[i];
+      if (prefetched[t.id]) continue;
+      if (t.size > 40 * 1024 * 1024) continue;
+      try {
+        const res = await fetch(sourcesFor(t.id)[0]);
+        if (!res.ok) { log("pre-download failed " + res.status); break; }
+        prefetched[t.id] = URL.createObjectURL(await res.blob());
+      } catch (e) { log("pre-download error"); break; }
+    }
+  } finally {
+    prefetching = false;
+    if (prefetchAgain) { prefetchAgain = false; prefetchNext(); }
+  }
+}
+
+// Keep the screen / system awake while music plays
+async function lockScreen() {
+  try {
+    if ("wakeLock" in navigator && !wakeLock && document.visibilityState === "visible") {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch (e) {}
+}
+function unlockScreen() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+audio.addEventListener("play", lockScreen);
+audio.addEventListener("pause", () => setTimeout(() => { if (audio.paused) unlockScreen(); }, 2000));  // ignore the brief pause between songs
+
+// Lock-screen / notification controls so playback continues when minimized
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("play", () => { userPaused = false; audio.play(); });
+  navigator.mediaSession.setActionHandler("pause", () => { userPaused = true; audio.pause(); });
+  navigator.mediaSession.setActionHandler("nexttrack", next);
+  navigator.mediaSession.setActionHandler("previoustrack", prev);
+  try {
+    navigator.mediaSession.setActionHandler("seekto", d => { if (d.seekTime != null) audio.currentTime = d.seekTime; });
+    navigator.mediaSession.setActionHandler("seekbackward", () => { audio.currentTime = Math.max(0, audio.currentTime - 10); });
+    navigator.mediaSession.setActionHandler("seekforward", () => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); });
+  } catch (e) {}
+  audio.addEventListener("play", () => navigator.mediaSession.playbackState = "playing");
+  audio.addEventListener("pause", () => navigator.mediaSession.playbackState = "paused");
+}
+
+// Same media element is reused for every track, so the browser keeps
+// playing (and moving to the next song) even when the app is minimized or the screen is locked.
+audio.addEventListener("playing", () => { failCount = 0; prefetchNext(); });
+audio.addEventListener("ended", () => {
+  if (repeat) return play(current);
+  if (autoplay) return next();
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+});
+audio.addEventListener("error", () => {
+  if (current < 0) return;
+  const list = sourcesFor(songs[current].id);
+  log("media error " + (audio.error ? audio.error.code : "?"));
+  if (audio.src.startsWith("blob:")) {   // downloaded copy failed: fall back to streaming
+    URL.revokeObjectURL(audio.src); delete prefetched[songs[current].id];
+    srcTry = 0; audio.src = list[0]; audio.play().catch(() => {}); return;
+  }
+  if (++srcTry < list.length) {
+    audio.src = list[srcTry];
+    audio.play().catch(() => {});
+  } else {
+    const code = audio.error ? audio.error.code : "?";
+    statusEl.textContent = "Couldn't play (error " + code + "). Add an API key in the code, and open this page from a web host, not as a local file." +
+      (songs[current].video ? " (Some video formats, e.g. MKV/AVI, aren't supported by browsers; MP4 with H.264 works best.)" : "");
+    // Don't let one bad file stop the playlist: skip ahead (max 3 in a row)
+    if (autoplay && failCount++ < 3) setTimeout(next, 800);
+  }
+});
+
+// ---- Keep-going safeguards ----
+playerEl.addEventListener("pointerdown", () => { lastTouch = Date.now(); });
+audio.addEventListener("play", () => { userPaused = false; });
+audio.addEventListener("pause", () => {
+  if (!audio.ended && Date.now() - lastTouch < 1500) userPaused = true;   // you pressed pause on the page
+  log(audio.ended ? "song ended" : (userPaused ? "paused by you" : "paused by system"));
+});
+audio.addEventListener("waiting", () => log("buffering…"));
+
+function resumeIfNeeded(why) {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended) { log(why + ": moving to next"); repeat ? play(current) : next(); }
+  else if (audio.paused) { log(why + ": resuming"); audio.play().catch(() => {}); }
+}
+["visibilitychange", "focus", "pageshow", "online"].forEach(ev => window.addEventListener(ev, () => {
+  if (ev === "visibilitychange" && document.visibilityState === "visible" && !audio.paused) lockScreen();
+  resumeIfNeeded(ev);
+}));
+
+// Watchdog: catches a missed "ended", a pause forced by the system, or a stuck download
+let lastT = -1, stuck = 0;
+setInterval(() => {
+  if (!autoplay || current < 0 || userPaused) return;
+  if (audio.ended || audio.paused) { resumeIfNeeded("watchdog"); return; }
+  if (audio.currentTime === lastT && audio.readyState < 3) {
+    if (++stuck >= 4) {
+      stuck = 0; log("stuck, reloading");
+      const t = audio.currentTime;
+      audio.src = sourcesFor(songs[current].id)[0];
+      audio.addEventListener("loadedmetadata", () => { audio.currentTime = t; audio.play().catch(() => {}); }, { once: true });
+    }
+  } else stuck = 0;
+  lastT = audio.currentTime;
+}, 3000);
+
+document.getElementById("next").onclick = next;
+document.getElementById("prev").onclick = prev;
+document.getElementById("shuffle").onclick = e => {
+  shuffle = !shuffle;
+  e.target.classList.toggle("on", shuffle);
+  if (shuffle) {
+    // Fisher-Yates shuffle of all songs; the song now playing goes to the top
+    const arr = songs.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    rank = new Map();
+    arr.forEach((s, i) => rank.set(s, i));
+    if (current >= 0) rank.set(songs[current], -1);
+  }
+  if (queue.length) queue = queue.slice().sort(shuffle ? (a, b) => rank.get(a) - rank.get(b) : (a, b) => songs.indexOf(a) - songs.indexOf(b));
+  render();   // off = back to alphabetical order
+  if (current >= 0) prefetchNext();
+};
+document.getElementById("repeat").onclick = e => { repeat = !repeat; e.target.classList.toggle("on", repeat); };
+document.getElementById("auto").classList.toggle("on", autoplay);
+document.getElementById("auto").onclick = e => {
+  autoplay = !autoplay; e.target.classList.toggle("on", autoplay);
+  try { localStorage.setItem("autoplay", autoplay ? "1" : "0"); } catch (err) {}
+};
+document.getElementById("search").oninput = render;
+document.getElementById("folder").onchange = () => { currentSub = null; render(); };
+
+loadSongs().then(list => {
+  songs = list;
+  const sel = document.getElementById("folder");
+  sel.innerHTML = "";
+  const addOpt = (value, label) => {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label;
+    sel.appendChild(o);
+  };
+  addOpt("__all", "All folders");
+  // Every folder from both groups is listed in the dropdown
+  // (built from the config, so a folder still shows even if it came back empty)
+  const names = hasKey ? FOLDERS.filter(f => !f.id.startsWith("PASTE")).map(f => f.name) : [...new Set(songs.map(x => x.folder))];
+  names.forEach(n => addOpt(n, hasKey ? `${n} (${(folderInfo[n] || {}).count || 0})` : n));
+  if (!songs.length) statusEl.textContent = "No songs yet. Add your API key or MANUAL_SONGS in the code.";
+  render();
+}).catch(err => { statusEl.textContent = err.message; });
+</script>
+<script src="https://raamaprabhu.github.io/songs/disable_rightclick.js"></script>
+</body>
+</html>
